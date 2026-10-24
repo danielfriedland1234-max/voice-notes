@@ -76,6 +76,7 @@
     render(view, id);
   }
   function render(view, id) {
+    closeFix();
     if (view === 'detail') openDetail(id);
     else if (view === 'settings') { renderSettings(); show('settings'); }
     else {
@@ -133,9 +134,126 @@
     $('detail-date').textContent = fmtDate(it.createdAt);
     $('detail-text').value = it.text;
     $('save-state').textContent = it.updatedAt !== it.createdAt ? 'Edited ' + fmtDate(it.updatedAt) : '';
+    setEditAll(false);
     placeRecorder(state.busy && state.appendTo === id);
     show('detail');
   }
+
+  // ---------- Tap a word to correct or delete it ----------
+  // The text is split into words and the spaces/line breaks between them.
+  // Punctuation stuck to a word ("milk." or "(note") is kept when you fix it.
+  let tokens = [], fixIndex = -1, editingAll = false;
+  const PUNCT_START = /^[("'“‘[]+/;
+  const PUNCT_END = /[.,!?;:)"'”’…\]]+$/;
+  const isSpace = t => /^\s+$/.test(t || '');
+  function splitToken(tok) {
+    const pre = (tok.match(PUNCT_START) || [''])[0];
+    const rest = tok.slice(pre.length);
+    const suf = (rest.match(PUNCT_END) || [''])[0];
+    return { pre, core: rest.slice(0, rest.length - suf.length), suf };
+  }
+
+  function renderWords(flashIndex) {
+    const box = $('detail-words');
+    box.textContent = '';
+    tokens = $('detail-text').value.split(/(\s+)/);
+    tokens.forEach((tok, i) => {
+      if (!tok) return;
+      if (isSpace(tok)) { box.append(tok); return; }
+      const s = document.createElement('span');
+      s.className = 'w' + (i === flashIndex ? ' flash' : '');
+      s.dataset.i = i;
+      s.textContent = tok;
+      box.append(s);
+    });
+    if (!box.textContent.trim()) {
+      box.innerHTML = '<span class="placeholder">(empty) Tap “Edit all text” to type something.</span>';
+    }
+    const flashed = box.querySelector('.flash');
+    if (flashed) setTimeout(() => flashed.classList.remove('flash'), 50);
+  }
+
+  $('detail-words').onclick = e => {
+    const w = e.target.closest('.w');
+    if (w) openFix(+w.dataset.i);
+  };
+
+  function openFix(i) {
+    fixIndex = i;
+    const { core } = splitToken(tokens[i]);
+    const word = core || tokens[i];
+    for (const s of document.querySelectorAll('.w.sel')) s.classList.remove('sel');
+    const span = document.querySelector(`.w[data-i="${i}"]`);
+    if (span) span.classList.add('sel');
+    $('fix-was').textContent = word;
+    $('fix-input').value = word;
+    $('fix-sheet').hidden = false;
+    $('fix-input').focus();
+    $('fix-input').select(); // typing replaces the whole word
+  }
+
+  function closeFix() {
+    if ($('fix-sheet').hidden) return;
+    $('fix-sheet').hidden = true;
+    fixIndex = -1;
+    $('fix-input').blur();
+    for (const s of document.querySelectorAll('.w.sel')) s.classList.remove('sel');
+  }
+
+  async function applyFix(replacement) {
+    const i = fixIndex;
+    if (i < 0) return;
+    const { pre, core, suf } = splitToken(tokens[i]);
+    replacement = replacement.replace(/\s+/g, ' ').trim();
+    let flash;
+    if (replacement) {
+      tokens[i] = core ? pre + replacement + suf : replacement;
+      flash = i;
+      toast('Corrected');
+    } else {
+      // Delete the word. Keep punctuation after it (e.g. "milk extra." → "milk.")
+      // and remove one of the spaces around it.
+      if (core && suf && isSpace(tokens[i - 1]) && !tokens[i - 1].includes('\n') && i >= 2) {
+        tokens[i - 1] = '';
+        tokens[i] = suf;
+      } else if (core && suf) {
+        tokens[i] = suf;
+      } else {
+        tokens[i] = '';
+        if (isSpace(tokens[i - 1]) && !tokens[i - 1].includes('\n')) tokens[i - 1] = '';
+        else if (isSpace(tokens[i + 1]) && !tokens[i + 1].includes('\n')) tokens[i + 1] = '';
+      }
+      toast('Word deleted');
+    }
+    $('detail-text').value = tokens.join('');
+    closeFix();
+    await saveDetailNow();
+    renderWords(flash);
+  }
+
+  $('fix-save').onclick = () => applyFix($('fix-input').value);
+  $('fix-delete').onclick = () => applyFix('');
+  $('fix-cancel').onclick = closeFix;
+  $('fix-sheet').onclick = e => { if (e.target === $('fix-sheet')) closeFix(); }; // tap outside the box
+  $('fix-input').onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); applyFix($('fix-input').value); }
+    else if (e.key === 'Escape') closeFix();
+  };
+
+  // "Edit all text" switches to a normal text box for bigger changes.
+  function setEditAll(on) {
+    editingAll = on;
+    $('detail-text').hidden = !on;
+    $('detail-words').hidden = on;
+    $('words-hint').hidden = on;
+    $('edit-all').textContent = on ? '✓ Done editing' : '✎ Edit all text';
+    if (on) $('detail-text').focus();
+    else renderWords();
+  }
+  $('edit-all').onclick = async () => {
+    if (editingAll) { await saveDetailNow(); setEditAll(false); }
+    else setEditAll(true);
+  };
 
   // "Continue recording": record more and add it to the end of this transcript.
   $('continue').onclick = async () => {
@@ -499,6 +617,10 @@
       const ta = $('detail-text');
       ta.value = it.text;
       ta.scrollTop = ta.scrollHeight;
+      if (!editingAll) {
+        renderWords();
+        $('detail-words').scrollTop = $('detail-words').scrollHeight;
+      }
       $('save-state').textContent = 'Saved';
     } else {
       go('detail', id);
