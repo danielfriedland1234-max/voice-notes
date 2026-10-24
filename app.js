@@ -297,14 +297,19 @@
   }
 
   function cleanWhisperText(t) {
-    return applyVoiceCommands(t.replace(/\[(BLANK_AUDIO|MUSIC|NOISE|SILENCE)\]/gi, '').replace(/\s+/g, ' '));
+    return applyVoiceCommands(t.replace(/\[(BLANK_AUDIO|MUSIC|NOISE|SILENCE)\]/gi, ''));
   }
 
   // Spoken commands: saying "new line" starts a new line.
   // "Buy milk. New line. Call the dentist." becomes "Buy milk.\nCall the dentist."
+  // The speech engine doesn't always spell it the same way, so this also
+  // accepts "newline", "new-line", "new lines", "knew line", "nu line",
+  // and the words wrapped in quotes or followed by "...".
+  const NEW_LINE = /[,;:]?[ \t]*["'“”‘’]?\b(?:new|knew|nu|neu)(?:[ \t]*[-‐‑–—][ \t]*|[ \t]*)lines?\b["'“”‘’]?(?:[ \t.,;:!?…"'“”‘’]*)/gi;
   function applyVoiceCommands(t) {
     return t
-      .replace(/[,;:]?[ \t]*\bnew[ -]?line\b[ \t.,;:!?]*/gi, '\n')
+      .replace(/[ \t]+/g, ' ')        // tidy spaces, but keep any line breaks already there
+      .replace(NEW_LINE, '\n')
       .replace(/[ \t]+\n/g, '\n')
       .replace(/\n[ \t]+/g, '\n')
       .replace(/\n([a-z])/g, (m, c) => '\n' + c.toUpperCase()) // capital letter after a new line
@@ -446,7 +451,7 @@
     });
     recognition = null;
     $('live-text').hidden = true;
-    const text = applyVoiceCommands(finals.filter(Boolean).join(' ').replace(/\s+/g, ' '));
+    const text = applyVoiceCommands(finals.filter(Boolean).join(' '));
     setStatus('');
     if (!text) state.appendTo = null, toast('No speech heard. Try again.');
     else await saveResult(text, 'fast', (Date.now() - startedAt) / 1000);
