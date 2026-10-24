@@ -502,6 +502,10 @@
 
   // ---------- Start ----------
   for (const el of document.querySelectorAll('.app-version')) el.textContent = VERSION;
+  // Tell the user when the app has just updated itself to a new version.
+  const seen = read('seen-version', '');
+  if (seen && seen !== VERSION) setTimeout(() => toast('Updated to v' + VERSION), 300);
+  write('seen-version', VERSION);
   history.replaceState({ view: 'home' }, '');
   updateHome();
   renderList();
