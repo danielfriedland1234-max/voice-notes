@@ -145,6 +145,39 @@ body {
   min-height: 48px; padding: 0 4px; cursor: pointer; white-space: nowrap;
 }
 
+/* Text / To-do list switch */
+.segmented {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 0 0 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 4px;
+}
+.seg {
+  min-height: 46px; border: 0; border-radius: 10px; background: transparent;
+  color: var(--muted); font: inherit; font-weight: 600; cursor: pointer;
+}
+.seg[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+
+/* To-do list */
+.detail-words.as-list { white-space: normal; padding: 4px 10px; }
+.todo-list { list-style: none; margin: 0; padding: 0; }
+.todo {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 6px 0; border-bottom: 1px solid var(--border); transition: opacity 0.3s;
+}
+.todo:last-child { border-bottom: 0; }
+.check {
+  flex: none; width: 48px; height: 48px; margin-left: -8px; padding: 0;
+  border: 0; background: transparent; display: grid; place-items: center; cursor: pointer;
+}
+.check::before {
+  content: ''; width: 28px; height: 28px; box-sizing: border-box;
+  border: 2px solid var(--muted); border-radius: 8px;
+  display: grid; place-items: center; font-size: 19px; font-weight: 800; line-height: 1;
+}
+.todo.done .check::before { content: '✓'; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.todo-text { flex: 1; padding-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.todo.done { opacity: 0.55; }
+.todo.done .todo-text { text-decoration: line-through; }
+
 /* Correct-a-word box: sits near the top so the keyboard never covers it */
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 20; background: rgb(0 0 0 / 0.6);
@@ -190,4 +223,9 @@ body {
   transform: translateX(-50%); max-width: calc(100% - 32px);
   background: var(--text); color: var(--bg); padding: 12px 18px; border-radius: 12px;
   font-weight: 600; z-index: 10; text-align: center;
+  display: flex; align-items: center; gap: 16px;
+}
+.toast-btn {
+  background: none; border: 0; color: inherit; font: inherit; font-weight: 800;
+  text-decoration: underline; min-height: 40px; padding: 0 4px; cursor: pointer;
 }

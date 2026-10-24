@@ -33,12 +33,20 @@
   const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2));
 
   let toastTimer;
-  function toast(msg) {
+  // A short message at the bottom. Can carry one button, e.g. "Undo".
+  function toast(msg, actionLabel, action) {
     const t = $('toast');
     t.textContent = msg;
+    if (action) {
+      const b = document.createElement('button');
+      b.className = 'toast-btn';
+      b.textContent = actionLabel;
+      b.onclick = () => { t.hidden = true; action(); };
+      t.append(b);
+    }
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (t.hidden = true), 2500);
+    toastTimer = setTimeout(() => (t.hidden = true), action ? 5000 : 2500);
   }
   function setStatus(msg) { $('status').textContent = msg || ''; }
   function setProgress(fraction) {
@@ -76,6 +84,7 @@
     render(view, id);
   }
   function render(view, id) {
+    flushTicks(); // finish removing ticked items before leaving the screen
     closeFix();
     if (view === 'detail') openDetail(id);
     else if (view === 'settings') { renderSettings(); show('settings'); }
@@ -116,7 +125,12 @@
       d.textContent = fmtDate(it.createdAt);
       const t = document.createElement('span');
       t.className = 'item-text';
-      t.textContent = it.text || '(empty)';
+      if (it.format === 'list') {
+        const items = it.text.split('\n').map(s => s.trim()).filter(Boolean);
+        t.textContent = items.length ? '☑ ' + items.join(' · ') : '☑ All done';
+      } else {
+        t.textContent = it.text || '(empty)';
+      }
       btn.append(d, t);
       btn.onclick = () => go('detail', it.id);
       li.append(btn);
@@ -134,6 +148,8 @@
     $('detail-date').textContent = fmtDate(it.createdAt);
     $('detail-text').value = it.text;
     $('save-state').textContent = it.updatedAt !== it.createdAt ? 'Edited ' + fmtDate(it.updatedAt) : '';
+    currentFormat = it.format === 'list' ? 'list' : 'text';
+    updateFormatUI();
     setEditAll(false);
     placeRecorder(state.busy && state.appendTo === id);
     show('detail');
@@ -153,30 +169,133 @@
     return { pre, core: rest.slice(0, rest.length - suf.length), suf };
   }
 
+  function wordSpan(tok, i, flashIndex) {
+    const s = document.createElement('span');
+    s.className = 'w' + (i === flashIndex ? ' flash' : '');
+    s.dataset.i = i;
+    s.textContent = tok;
+    return s;
+  }
+
   function renderWords(flashIndex) {
     const box = $('detail-words');
     box.textContent = '';
     tokens = $('detail-text').value.split(/(\s+)/);
-    tokens.forEach((tok, i) => {
-      if (!tok) return;
-      if (isSpace(tok)) { box.append(tok); return; }
-      const s = document.createElement('span');
-      s.className = 'w' + (i === flashIndex ? ' flash' : '');
-      s.dataset.i = i;
-      s.textContent = tok;
-      box.append(s);
-    });
-    if (!box.textContent.trim()) {
-      box.innerHTML = '<span class="placeholder">(empty) Tap “Edit all text” to type something.</span>';
+    const asList = currentFormat === 'list';
+    box.classList.toggle('as-list', asList);
+
+    if (!asList) {
+      tokens.forEach((tok, i) => {
+        if (!tok) return;
+        if (isSpace(tok)) box.append(tok);
+        else box.append(wordSpan(tok, i, flashIndex));
+      });
+      if (!box.textContent.trim()) {
+        box.innerHTML = '<span class="placeholder">(empty) Tap “Edit all text” to type something.</span>';
+      }
+    } else {
+      // To-do list: every line becomes an item with a tick box.
+      const ul = document.createElement('ul');
+      ul.className = 'todo-list';
+      box.append(ul);
+      let line = 0, words = null;
+      tokens.forEach((tok, i) => {
+        if (!tok) return;
+        if (isSpace(tok)) {
+          const breaks = (tok.match(/\n/g) || []).length;
+          if (breaks) { line += breaks; words = null; }
+          else if (words) words.append(tok);
+          return;
+        }
+        if (!words) {
+          const li = document.createElement('li');
+          li.className = 'todo';
+          li.dataset.line = line;
+          const check = document.createElement('button');
+          check.className = 'check';
+          check.setAttribute('aria-label', 'Tick off');
+          words = document.createElement('span');
+          words.className = 'todo-text';
+          li.append(check, words);
+          ul.append(li);
+        }
+        words.append(wordSpan(tok, i, flashIndex));
+      });
+      if (!ul.children.length) {
+        box.innerHTML = '<span class="placeholder">All done! 🎉 Tap “Continue recording” to add more items.</span>';
+      }
     }
     const flashed = box.querySelector('.flash');
     if (flashed) setTimeout(() => flashed.classList.remove('flash'), 50);
   }
 
   $('detail-words').onclick = e => {
+    const check = e.target.closest('.check');
+    if (check) { tick(check.closest('.todo')); return; }
     const w = e.target.closest('.w');
     if (w) openFix(+w.dataset.i);
   };
+
+  // ---------- Text / To-do list format ----------
+  let currentFormat = 'text';
+  function updateFormatUI() {
+    $('fmt-text').setAttribute('aria-pressed', currentFormat === 'text');
+    $('fmt-list').setAttribute('aria-pressed', currentFormat === 'list');
+    $('words-hint').textContent = currentFormat === 'list'
+      ? 'Tap a box to tick an item off. Tap a word to correct it.'
+      : 'Tap a word to correct or delete it.';
+  }
+  async function setFormat(f) {
+    if (f === currentFormat || !state.openId) return;
+    flushTicks();
+    currentFormat = f;
+    updateFormatUI();
+    if (!editingAll) renderWords();
+    const it = await DB.get(state.openId);
+    if (it) { it.format = f; await DB.put(it); }
+    if (f === 'list') toast('Each line is now a to-do item');
+  }
+  $('fmt-text').onclick = () => setFormat('text');
+  $('fmt-list').onclick = () => setFormat('list');
+
+  // Ticking items off: they're removed a moment later (so you can tick several),
+  // with an Undo button in case of a mistake.
+  let tickTimer = null;
+  function tick(li) {
+    li.classList.toggle('done');
+    clearTimeout(tickTimer);
+    tickTimer = setTimeout(removeTicked, 900);
+  }
+  function flushTicks() {
+    if (tickTimer) { clearTimeout(tickTimer); removeTicked(); }
+  }
+  async function removeTicked() {
+    tickTimer = null;
+    const done = [...document.querySelectorAll('.todo.done')].map(li => +li.dataset.line);
+    const id = state.openId;
+    if (!done.length || !id) return;
+    const before = $('detail-text').value;
+    const after = before.split('\n').filter((_, k) => !done.includes(k)).join('\n');
+    $('detail-text').value = after;
+    await saveDetailNow();
+    if (state.openId === id) renderWords();
+    else if (!$('home').hidden) renderList(); // you already went back: refresh the list preview
+    toast(done.length === 1 ? 'Ticked off' : `${done.length} items ticked off`, 'Undo', async () => {
+      const it = await DB.get(id);
+      if (!it) return;
+      it.text = before;
+      it.updatedAt = new Date().toISOString();
+      await DB.put(it);
+      if (state.openId === id) { $('detail-text').value = before; if (!editingAll) renderWords(); }
+    });
+  }
+
+  // Text for Copy/Share: to-do lists get a bullet in front of each item.
+  function exportText() {
+    const text = $('detail-text').value;
+    if (currentFormat !== 'list') return text;
+    return text.split('\n').map(s => s.trim()).filter(Boolean).map(s => '• ' + s).join('\n');
+  }
 
   function openFix(i) {
     fixIndex = i;
@@ -289,9 +408,9 @@
     }
     toast('Copied');
   }
-  $('copy').onclick = () => copyText($('detail-text').value);
+  $('copy').onclick = () => copyText(exportText());
   $('share').onclick = async () => {
-    const text = $('detail-text').value;
+    const text = exportText();
     if (navigator.share) {
       try { await navigator.share({ text }); } catch (e) { if (e.name !== 'AbortError') copyText(text); }
     } else {
@@ -607,7 +726,9 @@
     if (onScreen) { clearTimeout(saveTimer); it.text = $('detail-text').value; } // include any unsaved edits
     const before = it.text.replace(/[ \t]+$/, '');
     // Join with a space, unless either side is already a new line.
-    const joiner = !before || before.endsWith('\n') || text.startsWith('\n') ? '' : ' ';
+    // In a to-do list, each new recording starts a new item.
+    const joiner = !before || before.endsWith('\n') || text.startsWith('\n') ? '' : it.format === 'list' ? '\n' : ' ';
+    if (it.format === 'list') text = text.replace(/^(\n*)([a-z])/, (m, nl, c) => nl + c.toUpperCase());
     it.text = before + joiner + text;
     it.updatedAt = new Date().toISOString();
     it.seconds = (it.seconds || 0) + Math.round(seconds);
