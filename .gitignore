@@ -1,3 +1,4 @@
 # Local testing files, never published
 test-speech.wav
 .claude/
+test-newline.wav

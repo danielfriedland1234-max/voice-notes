@@ -297,7 +297,18 @@
   }
 
   function cleanWhisperText(t) {
-    return t.replace(/\[(BLANK_AUDIO|MUSIC|NOISE|SILENCE)\]/gi, '').replace(/\s+/g, ' ').trim();
+    return applyVoiceCommands(t.replace(/\[(BLANK_AUDIO|MUSIC|NOISE|SILENCE)\]/gi, '').replace(/\s+/g, ' '));
+  }
+
+  // Spoken commands: saying "new line" starts a new line.
+  // "Buy milk. New line. Call the dentist." becomes "Buy milk.\nCall the dentist."
+  function applyVoiceCommands(t) {
+    return t
+      .replace(/[,;:]?[ \t]*\bnew[ -]?line\b[ \t.,;:!?]*/gi, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\n([a-z])/g, (m, c) => '\n' + c.toUpperCase()) // capital letter after a new line
+      .replace(/^[ \t]+|[ \t]+$/g, '');
   }
 
   // ---------- Recording ----------
@@ -423,7 +434,7 @@
     setStatus('Listening…');
   }
   function showLive() {
-    $('live-text').textContent = [...finals, interim].filter(Boolean).join(' ');
+    $('live-text').textContent = applyVoiceCommands([...finals, interim].filter(Boolean).join(' '));
   }
   let recognitionDone = null;
   async function stopFastRecording() {
@@ -435,7 +446,7 @@
     });
     recognition = null;
     $('live-text').hidden = true;
-    const text = finals.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    const text = applyVoiceCommands(finals.filter(Boolean).join(' ').replace(/\s+/g, ' '));
     setStatus('');
     if (!text) state.appendTo = null, toast('No speech heard. Try again.');
     else await saveResult(text, 'fast', (Date.now() - startedAt) / 1000);
@@ -471,8 +482,10 @@
     if (!it) return saveNew(text, mode, seconds);
     const onScreen = state.openId === id && !$('detail').hidden;
     if (onScreen) { clearTimeout(saveTimer); it.text = $('detail-text').value; } // include any unsaved edits
-    const before = it.text.replace(/\s+$/, '');
-    it.text = before ? before + ' ' + text : text;
+    const before = it.text.replace(/[ \t]+$/, '');
+    // Join with a space, unless either side is already a new line.
+    const joiner = !before || before.endsWith('\n') || text.startsWith('\n') ? '' : ' ';
+    it.text = before + joiner + text;
     it.updatedAt = new Date().toISOString();
     it.seconds = (it.seconds || 0) + Math.round(seconds);
     await DB.put(it);
@@ -488,6 +501,8 @@
   }
 
   async function saveNew(text, mode, seconds) {
+    // A new transcript starts with a capital letter, not a blank line.
+    text = text.replace(/^\n+/, '').replace(/^[a-z]/, c => c.toUpperCase());
     const now = new Date().toISOString();
     const item = { id: newId(), createdAt: now, updatedAt: now, text, mode, seconds: Math.round(seconds) };
     await DB.put(item);
@@ -570,5 +585,5 @@
   if ((settings.mode === 'private' || !hasFastMode) && settings.isDownloaded(settings.model)) preloadModel();
 
   // Exposed for testing only.
-  window.VoiceNotes = { transcribeAndSave, decodeTo16k, state, placeRecorder };
+  window.VoiceNotes = { transcribeAndSave, decodeTo16k, state, placeRecorder, applyVoiceCommands };
 })();
