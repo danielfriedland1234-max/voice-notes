@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Voice Notes</title>
+  <meta name="description" content="Private voice transcription that stays on your device.">
+  <meta name="theme-color" content="#2f6fed">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Home: record button + list of transcripts -->
+  <main id="home" class="view">
+    <header class="topbar">
+      <h1>Voice Notes</h1>
+      <button id="open-settings" class="icon-btn" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+      </button>
+    </header>
+
+    <section id="model-card" class="card notice" hidden>
+      <p><strong>One-time setup:</strong> private mode needs a speech model downloaded to this phone (about <span id="model-size">80 MB</span>). Use Wi-Fi if you can.</p>
+      <button id="download-model" class="btn primary">Download speech model</button>
+    </section>
+
+    <section class="recorder">
+      <button id="record" class="record-btn" aria-label="Start recording">
+        <span class="record-icon" aria-hidden="true"></span>
+      </button>
+      <p id="record-label" class="record-label">Tap to record</p>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <div id="progress" class="progress" hidden><div id="progress-bar"></div></div>
+      <button id="retry" class="btn primary" hidden>Try again</button>
+      <p id="live-text" class="live-text" hidden></p>
+      <p id="mode-badge" class="mode-badge"></p>
+    </section>
+
+    <section>
+      <h2 class="list-title">Your transcripts</h2>
+      <ul id="list" class="list"></ul>
+      <p id="empty" class="empty">No transcripts yet. Tap the button above and start talking.</p>
+    </section>
+
+    <footer class="version">v<span class="app-version"></span></footer>
+  </main>
+
+  <!-- One transcript: view, edit, copy, share, delete -->
+  <section id="detail" class="view" hidden>
+    <header class="topbar">
+      <button id="back" class="icon-btn" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>
+      </button>
+      <h1 id="detail-date" class="detail-date"></h1>
+      <span class="icon-btn-spacer"></span>
+    </header>
+    <textarea id="detail-text" class="detail-text" aria-label="Transcript text"></textarea>
+    <p id="save-state" class="save-state"></p>
+    <div class="actions">
+      <button id="copy" class="btn primary">Copy</button>
+      <button id="share" class="btn primary">Share</button>
+    </div>
+    <button id="delete" class="btn danger wide">Delete transcript</button>
+  </section>
+
+  <!-- Settings -->
+  <section id="settings" class="view" hidden>
+    <header class="topbar">
+      <button id="settings-back" class="icon-btn" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>
+      </button>
+      <h1>Settings</h1>
+      <span class="icon-btn-spacer"></span>
+    </header>
+
+    <div class="card">
+      <h2>Speech recognition</h2>
+      <label class="choice">
+        <input type="radio" name="mode" value="private">
+        <span><strong>Private (recommended)</strong><br>Runs on this phone. Your voice never leaves it. Text appears after you stop.</span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="mode" value="fast">
+        <span><strong>Fast</strong><br>Text appears as you speak, but your voice is sent to Google to be recognised.</span>
+      </label>
+    </div>
+
+    <div class="card">
+      <h2>Private model</h2>
+      <label class="choice">
+        <input type="radio" name="model" value="base">
+        <span><strong>Standard</strong><br>Better accuracy. About 80 MB download.</span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="model" value="tiny">
+        <span><strong>Quick</strong><br>Faster, less accurate. About 45 MB download.</span>
+      </label>
+    </div>
+
+    <div class="card">
+      <h2>Backup &amp; restore</h2>
+      <p>Backup creates one file with all your transcripts. In the share menu, choose <strong>Drive</strong> to save it to Google Drive.</p>
+      <button id="backup" class="btn primary wide">Back up transcripts</button>
+      <p>To restore on a new phone, tap below and pick the backup file from Drive. Existing transcripts are kept.</p>
+      <button id="restore" class="btn wide">Restore from backup</button>
+      <input id="restore-file" type="file" accept=".txt,.json,text/plain,application/json" hidden>
+    </div>
+
+    <p class="version">Voice Notes v<span class="app-version"></span></p>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="version.js"></script>
+  <script src="db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
