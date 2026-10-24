@@ -10,6 +10,7 @@
     pendingReload: false,
     openId: null,
     lastAudio: null,      // kept so "Try again" works if transcription fails
+    appendTo: null,       // id of the transcript being continued (null = make a new one)
   };
 
   // ---------- Settings (stored in this browser only) ----------
@@ -77,7 +78,23 @@
   function render(view, id) {
     if (view === 'detail') openDetail(id);
     else if (view === 'settings') { renderSettings(); show('settings'); }
-    else { state.openId = null; show('home'); renderList(); }
+    else {
+      state.openId = null;
+      if (!state.busy) state.appendTo = null;
+      placeRecorder(false);
+      show('home');
+      renderList();
+    }
+  }
+
+  // The record button normally sits on the home screen. When continuing a
+  // transcript it moves into the transcript screen so the text stays in view.
+  const recorderInDetail = () => $('recorder').parentElement.id === 'detail-recorder-slot';
+  function placeRecorder(inDetail) {
+    $(inDetail ? 'detail-recorder-slot' : 'home-recorder-slot').append($('recorder'));
+    $('recorder').classList.toggle('compact', inDetail);
+    $('continue').hidden = inDetail;
+    if (!state.recording) setRecordingUI(false);
   }
   window.addEventListener('popstate', e => {
     const s = e.state || {};
@@ -116,8 +133,17 @@
     $('detail-date').textContent = fmtDate(it.createdAt);
     $('detail-text').value = it.text;
     $('save-state').textContent = it.updatedAt !== it.createdAt ? 'Edited ' + fmtDate(it.updatedAt) : '';
+    placeRecorder(state.busy && state.appendTo === id);
     show('detail');
   }
+
+  // "Continue recording": record more and add it to the end of this transcript.
+  $('continue').onclick = async () => {
+    await saveDetailNow();
+    state.appendTo = state.openId;
+    placeRecorder(true);
+    startRecording();
+  };
   async function saveDetailNow() {
     clearTimeout(saveTimer);
     if (!state.openId) return;
@@ -281,7 +307,7 @@
   function setRecordingUI(on) {
     $('record').classList.toggle('recording', on);
     $('record').setAttribute('aria-label', on ? 'Stop recording' : 'Start recording');
-    if (!on) $('record-label').textContent = 'Tap to record';
+    if (!on) $('record-label').textContent = recorderInDetail() ? 'Tap to record more' : 'Tap to record';
   }
 
   function startTimer() {
@@ -343,8 +369,8 @@
       const text = cleanWhisperText(await whisperTranscribe(audio));
       state.lastAudio = null;
       setStatus('');
-      if (!text) { toast('No speech heard. Try again closer to the mic.'); return; }
-      await saveNew(text, 'private', audio.length / 16000);
+      if (!text) { state.appendTo = null; toast('No speech heard. Try again closer to the mic.'); return; }
+      await saveResult(text, 'private', audio.length / 16000);
     } catch (e) {
       setStatus('Something went wrong: ' + e.message + '. Your recording is kept, tap "Try again".');
       $('retry').hidden = false;
@@ -352,6 +378,8 @@
       setProgress(null);
       $('record').disabled = false;
       setBusy(false);
+      // Done (unless it failed and "Try again" is showing): put the record button back.
+      if (!state.lastAudio && recorderInDetail()) placeRecorder(false);
     }
   }
   $('retry').onclick = () => state.lastAudio && transcribeAndSave(state.lastAudio);
@@ -409,8 +437,9 @@
     $('live-text').hidden = true;
     const text = finals.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
     setStatus('');
-    if (!text) { toast('No speech heard. Try again.'); return; }
-    await saveNew(text, 'fast', (Date.now() - startedAt) / 1000);
+    if (!text) state.appendTo = null, toast('No speech heard. Try again.');
+    else await saveResult(text, 'fast', (Date.now() - startedAt) / 1000);
+    if (recorderInDetail()) placeRecorder(false);
   }
 
   async function stopRecording() {
@@ -428,7 +457,35 @@
     }
   }
 
-  $('record').onclick = () => (state.recording ? stopRecording() : startRecording());
+  $('record').onclick = () => {
+    if (state.recording) return stopRecording();
+    if (!recorderInDetail()) state.appendTo = null; // home screen = new transcript
+    startRecording();
+  };
+
+  // Save the result: add it to the transcript being continued, or make a new one.
+  async function saveResult(text, mode, seconds) {
+    const id = state.appendTo;
+    state.appendTo = null;
+    const it = id && await DB.get(id);
+    if (!it) return saveNew(text, mode, seconds);
+    const onScreen = state.openId === id && !$('detail').hidden;
+    if (onScreen) { clearTimeout(saveTimer); it.text = $('detail-text').value; } // include any unsaved edits
+    const before = it.text.replace(/\s+$/, '');
+    it.text = before ? before + ' ' + text : text;
+    it.updatedAt = new Date().toISOString();
+    it.seconds = (it.seconds || 0) + Math.round(seconds);
+    await DB.put(it);
+    toast('Added to transcript');
+    if (onScreen) {
+      const ta = $('detail-text');
+      ta.value = it.text;
+      ta.scrollTop = ta.scrollHeight;
+      $('save-state').textContent = 'Saved';
+    } else {
+      go('detail', id);
+    }
+  }
 
   async function saveNew(text, mode, seconds) {
     const now = new Date().toISOString();
@@ -513,5 +570,5 @@
   if ((settings.mode === 'private' || !hasFastMode) && settings.isDownloaded(settings.model)) preloadModel();
 
   // Exposed for testing only.
-  window.VoiceNotes = { transcribeAndSave, decodeTo16k };
+  window.VoiceNotes = { transcribeAndSave, decodeTo16k, state, placeRecorder };
 })();

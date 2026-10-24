@@ -130,6 +130,16 @@ body {
 }
 .detail-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .save-state { color: var(--muted); font-size: 14px; min-height: 1.45em; margin: 6px 2px 10px; }
+.record-more { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 16px; }
+.record-more .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--record); }
+
+/* Smaller record button when continuing inside a transcript */
+.recorder.compact { padding: 4px 0 16px; }
+.recorder.compact .record-btn { width: 96px; height: 96px; }
+.recorder.compact .record-icon { width: 36px; height: 36px; }
+.recorder.compact .record-btn.recording .record-icon { width: 30px; height: 30px; border-radius: 6px; }
+.recorder.compact .record-label { font-size: 18px; margin-top: 10px; }
+
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; }
 
 .version-tag {

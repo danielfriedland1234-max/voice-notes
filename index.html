@@ -27,7 +27,8 @@
       <button id="download-model" class="btn primary">Download speech model</button>
     </section>
 
-    <section class="recorder">
+    <div id="home-recorder-slot">
+    <section id="recorder" class="recorder">
       <button id="record" class="record-btn" aria-label="Start recording">
         <span class="record-icon" aria-hidden="true"></span>
       </button>
@@ -38,6 +39,7 @@
       <p id="live-text" class="live-text" hidden></p>
       <p id="mode-badge" class="mode-badge"></p>
     </section>
+    </div>
 
     <section>
       <h2 class="list-title">Your transcripts</h2>
@@ -59,6 +61,9 @@
     </header>
     <textarea id="detail-text" class="detail-text" aria-label="Transcript text"></textarea>
     <p id="save-state" class="save-state"></p>
+    <button id="continue" class="btn wide record-more"><span class="dot" aria-hidden="true"></span>Continue recording</button>
+    <!-- While continuing, the record button moves here so the text stays in view -->
+    <div id="detail-recorder-slot"></div>
     <div class="actions">
       <button id="copy" class="btn primary">Copy</button>
       <button id="share" class="btn primary">Share</button>
