@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Voice Notes (mock)</title>
+  <meta name="theme-color" content="#121317">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    /* Mock-only additions on top of the real app's style.css */
+    .mock-banner {
+      font-size: 13px; color: var(--muted); text-align: center;
+      border: 1px dashed var(--border); border-radius: 10px; padding: 6px 10px; margin: 4px 0 12px;
+    }
+    .tabs { margin: 4px 0 16px; }
+    .new-btn { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 8px; }
+    .new-btn .plus { font-size: 26px; font-weight: 400; line-height: 1; }
+    .item-meta { display: block; font-size: 14px; color: var(--muted); margin-top: 4px; }
+    .preview-todo { display: block; color: var(--text); }
+    .preview-todo::before { content: '☐ '; color: var(--muted); }
+    .preview-todo.done { color: var(--muted); text-decoration: line-through; }
+    .preview-todo.done::before { content: '☑ '; }
+
+    /* Recording screen */
+    .live-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 6px 12px; min-height: 40dvh; margin-bottom: 8px;
+    }
+    .live-card.note { padding: 14px; white-space: pre-wrap; font-size: 18px; }
+    .live-card .placeholder { color: var(--muted); padding: 10px 2px; }
+    .todo.current { border-bottom-color: var(--accent); }
+    .todo.current .todo-text::after {
+      content: ''; display: inline-block; width: 2px; height: 1.1em; margin-left: 2px;
+      background: var(--accent); vertical-align: text-bottom; animation: blink 1s steps(1) infinite;
+    }
+    .todo.current .todo-text:empty::before { content: 'Listening…'; color: var(--muted); }
+    @keyframes blink { 50% { opacity: 0; } }
+    .rec-controls { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0 calc(12px + env(safe-area-inset-bottom)); }
+    .newline-btn {
+      width: 100%; min-height: 72px; font-size: 20px; margin-top: 4px;
+      display: flex; align-items: center; justify-content: center; gap: 12px;
+    }
+    .newline-btn .key { font-size: 26px; }
+    .rec-hint { color: var(--muted); font-size: 14px; text-align: center; margin: 8px 0 0; }
+  </style>
+</head>
+<body>
+  <!-- Home: Notes / To-do tabs -->
+  <main id="home" class="view">
+    <header class="topbar">
+      <h1>Voice Notes</h1>
+      <span class="version-tag">mock</span>
+      <span class="icon-btn-spacer"></span>
+    </header>
+    <p class="mock-banner">Mock-up only. Speech is simulated and nothing is saved.</p>
+
+    <div class="segmented tabs" role="tablist" aria-label="Type">
+      <button id="tab-note" class="seg" role="tab" aria-pressed="true">¶ Notes</button>
+      <button id="tab-todo" class="seg" role="tab" aria-pressed="false">☑ To-do</button>
+    </div>
+
+    <section id="panel-note">
+      <button id="new-note" class="btn primary wide new-btn"><span class="plus">+</span>New note</button>
+      <h2 class="list-title">Your notes</h2>
+      <ul id="list-note" class="list"></ul>
+    </section>
+
+    <section id="panel-todo" hidden>
+      <button id="new-todo" class="btn primary wide new-btn"><span class="plus">+</span>New to-do list</button>
+      <h2 class="list-title">Your to-do lists</h2>
+      <ul id="list-todo" class="list"></ul>
+    </section>
+  </main>
+
+  <!-- Recording a new note or to-do list -->
+  <section id="rec" class="view" hidden>
+    <header class="topbar">
+      <button id="rec-back" class="icon-btn" aria-label="Cancel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>
+      </button>
+      <h1 id="rec-title" class="detail-date">New note</h1>
+      <span class="icon-btn-spacer"></span>
+    </header>
+
+    <div id="rec-live" class="live-card"></div>
+
+    <div class="rec-controls">
+      <div class="recorder compact">
+        <button id="rec-btn" class="record-btn" aria-label="Stop recording">
+          <span class="record-icon" aria-hidden="true"></span>
+        </button>
+        <p id="rec-label" class="record-label">0:00</p>
+      </div>
+      <button id="newline" class="btn primary newline-btn" hidden><span class="key">↵</span>New line</button>
+      <p id="rec-hint" class="rec-hint"></p>
+    </div>
+  </section>
+
+  <!-- One saved note or to-do list -->
+  <section id="detail" class="view" hidden>
+    <header class="topbar">
+      <button id="detail-back" class="icon-btn" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>
+      </button>
+      <h1 id="detail-date" class="detail-date"></h1>
+      <span class="icon-btn-spacer"></span>
+    </header>
+    <div id="detail-body" class="detail-text detail-words"></div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    // Sample data so the lists aren't empty
+    const notes = [
+      { date: 'Today, 09:14', text: 'Idea for the weekend: drive out to the farm stall, then lunch at the place by the river. Ask Mike if he wants to come.' },
+      { date: 'Yesterday, 18:40', text: 'Meeting notes. Supplier can deliver by the 3rd. Need final numbers before Thursday.' },
+    ];
+    const todos = [
+      { date: 'Today, 07:55', items: [
+        { text: 'Buy milk and bread', done: true },
+        { text: 'Collect the dry cleaning', done: false },
+        { text: 'Pay the electricity bill', done: false },
+      ] },
+      { date: 'Mon, 12:02', items: [
+        { text: 'Book the car service', done: true },
+        { text: 'Email Sarah about Friday', done: true },
+      ] },
+    ];
+
+    // Simulated speech: each phrase is what you'd say before tapping "New line"
+    const fakeNote = 'Remember to call the plumber about the leak under the kitchen sink. Also check if the warranty on the geyser is still valid, I think it runs out in March.'.split(' ');
+    const fakeTodo = [
+      'pick up the kids at three',
+      'get a birthday card for mom',
+      'renew the car licence disc',
+      'order more printer ink',
+      'water the plants',
+      'call the bank about the card',
+    ];
+
+    let tab = 'note';
+
+    function show(view) {
+      for (const v of ['home', 'rec', 'detail']) $(v).hidden = v !== view;
+      window.scrollTo(0, 0);
+    }
+
+    function setTab(t) {
+      tab = t;
+      $('tab-note').setAttribute('aria-pressed', t === 'note');
+      $('tab-todo').setAttribute('aria-pressed', t === 'todo');
+      $('panel-note').hidden = t !== 'note';
+      $('panel-todo').hidden = t !== 'todo';
+    }
+
+    function renderLists() {
+      $('list-note').innerHTML = '';
+      notes.forEach((n, i) => {
+        const li = document.createElement('li');
+        li.innerHTML = `<button class="item"><span class="item-date">${n.date}</span><span class="item-text"></span></button>`;
+        li.querySelector('.item-text').textContent = n.text;
+        li.firstChild.onclick = () => openDetail('note', i);
+        $('list-note').append(li);
+      });
+
+      $('list-todo').innerHTML = '';
+      todos.forEach((t, i) => {
+        const done = t.items.filter((x) => x.done).length;
+        const li = document.createElement('li');
+        li.innerHTML = `<button class="item"><span class="item-date">${t.date}</span><span class="preview"></span><span class="item-meta">${done} of ${t.items.length} done</span></button>`;
+        const preview = li.querySelector('.preview');
+        t.items.slice(0, 3).forEach((x) => {
+          const s = document.createElement('span');
+          s.className = 'preview-todo' + (x.done ? ' done' : '');
+          s.textContent = x.text;
+          preview.append(s);
+        });
+        li.firstChild.onclick = () => openDetail('todo', i);
+        $('list-todo').append(li);
+      });
+    }
+
+    function openDetail(kind, i) {
+      const body = $('detail-body');
+      body.innerHTML = '';
+      body.classList.toggle('as-list', kind === 'todo');
+      if (kind === 'note') {
+        $('detail-date').textContent = notes[i].date;
+        body.textContent = notes[i].text;
+      } else {
+        $('detail-date').textContent = todos[i].date;
+        const ul = document.createElement('ul');
+        ul.className = 'todo-list';
+        todos[i].items.forEach((x) => {
+          const li = document.createElement('li');
+          li.className = 'todo' + (x.done ? ' done' : '');
+          li.innerHTML = '<button class="check" aria-label="Tick"></button><span class="todo-text"></span>';
+          li.querySelector('.todo-text').textContent = x.text;
+          li.querySelector('.check').onclick = () => { x.done = !x.done; li.classList.toggle('done', x.done); };
+          ul.append(li);
+        });
+        body.append(ul);
+      }
+      show('detail');
+    }
+
+    // ---- Recording (simulated) ----
+    let rec = null;
+
+    function startRecording(kind) {
+      rec = { kind, seconds: 0, words: [], items: [''], phrase: 0, word: 0 };
+      $('rec-title').textContent = kind === 'note' ? 'New note' : 'New to-do list';
+      $('rec-live').className = 'live-card' + (kind === 'note' ? ' note' : '');
+      $('newline').hidden = kind !== 'todo';
+      $('rec-hint').textContent = kind === 'todo'
+        ? 'Say an item, tap New line, say the next one. Tap the red button when you’re done.'
+        : 'Tap the red button when you’re done.';
+      $('rec-btn').classList.add('recording');
+      $('rec-label').textContent = '0:00';
+      renderLive();
+      show('rec');
+
+      rec.clock = setInterval(() => {
+        rec.seconds++;
+        $('rec-label').textContent = `${Math.floor(rec.seconds / 60)}:${String(rec.seconds % 60).padStart(2, '0')}`;
+      }, 1000);
+      rec.talk = setInterval(speakNextWord, 320);
+    }
+
+    // Adds one simulated word. For to-dos it goes quiet at the end of each phrase,
+    // like a person pausing, until New line is tapped.
+    function speakNextWord() {
+      if (rec.kind === 'note') {
+        if (rec.word < fakeNote.length) rec.words.push(fakeNote[rec.word++]);
+      } else {
+        const words = fakeTodo[rec.phrase % fakeTodo.length].split(' ');
+        if (rec.word < words.length) {
+          const last = rec.items.length - 1;
+          rec.items[last] = (rec.items[last] ? rec.items[last] + ' ' : '') + words[rec.word++];
+        }
+      }
+      renderLive();
+    }
+
+    function newLine() {
+      if (!rec || rec.kind !== 'todo') return;
+      if (!rec.items[rec.items.length - 1].trim()) return; // nothing said yet on this line
+      rec.items.push('');
+      rec.phrase++;
+      rec.word = 0;
+      renderLive();
+    }
+
+    function renderLive() {
+      const box = $('rec-live');
+      if (rec.kind === 'note') {
+        box.textContent = rec.words.join(' ');
+        if (!rec.words.length) box.innerHTML = '<p class="placeholder">Listening…</p>';
+        return;
+      }
+      box.innerHTML = '';
+      const ul = document.createElement('ul');
+      ul.className = 'todo-list';
+      rec.items.forEach((text, i) => {
+        const li = document.createElement('li');
+        li.className = 'todo' + (i === rec.items.length - 1 ? ' current' : '');
+        li.innerHTML = '<span class="check" aria-hidden="true"></span><span class="todo-text"></span>';
+        li.querySelector('.todo-text').textContent = capitalise(text);
+        ul.append(li);
+      });
+      box.append(ul);
+      box.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    }
+
+    function stopRecording(save) {
+      clearInterval(rec.clock);
+      clearInterval(rec.talk);
+      $('rec-btn').classList.remove('recording');
+      const r = rec;
+      rec = null;
+      if (!save) { show('home'); return; }
+
+      if (r.kind === 'note') {
+        if (!r.words.length) { show('home'); return; }
+        notes.unshift({ date: 'Just now', text: r.words.join(' ') });
+        renderLists();
+        openDetail('note', 0);
+      } else {
+        const items = r.items.map((t) => t.trim()).filter(Boolean);
+        if (!items.length) { show('home'); return; }
+        todos.unshift({ date: 'Just now', items: items.map((t) => ({ text: capitalise(t), done: false })) });
+        renderLists();
+        openDetail('todo', 0);
+      }
+      toast('Saved');
+    }
+
+    function capitalise(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+
+    function toast(msg) {
+      const t = $('toast');
+      t.textContent = msg;
+      t.hidden = false;
+      clearTimeout(t.timer);
+      t.timer = setTimeout(() => (t.hidden = true), 1500);
+    }
+
+    $('tab-note').onclick = () => setTab('note');
+    $('tab-todo').onclick = () => setTab('todo');
+    $('new-note').onclick = () => startRecording('note');
+    $('new-todo').onclick = () => startRecording('todo');
+    $('rec-btn').onclick = () => stopRecording(true);
+    $('rec-back').onclick = () => stopRecording(false);
+    $('newline').onclick = newLine;
+    $('detail-back').onclick = () => { renderLists(); show('home'); };
+
+    renderLists();
+    setTab('note');
+  </script>
+</body>
+</html>

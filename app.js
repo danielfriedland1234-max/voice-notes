@@ -2,26 +2,18 @@
 (() => {
   const $ = id => document.getElementById(id);
   const VERSION = self.APP_VERSION;
-  const MODEL_SIZES = { base: '80 MB', tiny: '45 MB' };
 
   const state = {
-    busy: false,          // true while recording or transcribing (we don't auto-reload then)
+    busy: false,          // true while recording or saving (we don't auto-reload then)
     recording: false,
     pendingReload: false,
     openId: null,
-    lastAudio: null,      // kept so "Try again" works if transcription fails
-    appendTo: null,       // id of the transcript being continued (null = make a new one)
+    tab: 'note',          // 'note' or 'list' (to-do): which tab the home screen shows
+    kind: 'note',         // what's being recorded right now
+    appendTo: null,       // id being continued (null = make a new one)
+    before: '',           // its text so far, shown above the new words while recording
   };
 
-  // ---------- Settings (stored in this browser only) ----------
-  const settings = {
-    get mode() { return read('mode', 'private'); },
-    set mode(v) { write('mode', v); },
-    get model() { return read('model', 'base'); },
-    set model(v) { write('model', v); },
-    isDownloaded(m) { return read('downloaded-' + m, '') === '1'; },
-    markDownloaded(m) { write('downloaded-' + m, '1'); },
-  };
   function read(k, d) { try { return localStorage.getItem('vn-' + k) || d; } catch { return d; } }
   function write(k, v) { try { localStorage.setItem('vn-' + k, v); } catch {} }
 
@@ -31,6 +23,9 @@
   });
   const fmtTime = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2));
+  const isList = it => it.format === 'list';
+  const listLines = text => text.split('\n').map(s => s.trim()).filter(Boolean);
+  const capitalise = s => s.replace(/^[a-z]/, c => c.toUpperCase());
 
   let toastTimer;
   // A short message at the bottom. Can carry one button, e.g. "Undo".
@@ -49,10 +44,6 @@
     toastTimer = setTimeout(() => (t.hidden = true), action ? 5000 : 2500);
   }
   function setStatus(msg) { $('status').textContent = msg || ''; }
-  function setProgress(fraction) {
-    $('progress').hidden = fraction == null;
-    if (fraction != null) $('progress-bar').style.width = Math.round(fraction * 100) + '%';
-  }
 
   let wakeLock = null;
   async function keepAwake(on) {
@@ -75,7 +66,7 @@
 
   // ---------- Screens ----------
   function show(view) {
-    for (const v of ['home', 'detail', 'settings']) $(v).hidden = v !== view;
+    for (const v of ['home', 'rec', 'detail', 'settings']) $(v).hidden = v !== view;
     window.scrollTo(0, 0);
   }
   // Use browser history so the phone's Back button closes a screen instead of the app.
@@ -87,33 +78,39 @@
     flushTicks(); // finish removing ticked items before leaving the screen
     closeFix();
     if (view === 'detail') openDetail(id);
-    else if (view === 'settings') { renderSettings(); show('settings'); }
+    else if (view === 'settings') { renderAccents(); renderFixes(); show('settings'); }
     else {
       state.openId = null;
-      if (!state.busy) state.appendTo = null;
-      placeRecorder(false);
       show('home');
       renderList();
     }
   }
-
-  // The record button normally sits on the home screen. When continuing a
-  // transcript it moves into the transcript screen so the text stays in view.
-  const recorderInDetail = () => $('recorder').parentElement.id === 'detail-recorder-slot';
-  function placeRecorder(inDetail) {
-    $(inDetail ? 'detail-recorder-slot' : 'home-recorder-slot').append($('recorder'));
-    $('recorder').classList.toggle('compact', inDetail);
-    $('continue').hidden = inDetail;
-    if (!state.recording) setRecordingUI(false);
-  }
   window.addEventListener('popstate', e => {
+    // Back while recording = stop and save. The recording screen moves on by itself afterwards.
+    if (state.recording) { stopRecording(); return; }
     const s = e.state || {};
-    render(s.view || 'home', s.id);
+    render(s.view === 'rec' ? 'home' : s.view || 'home', s.id);
   });
 
-  // ---------- Transcript list ----------
+  // ---------- Home: tabs + list ----------
+  function setTab(t) {
+    state.tab = t;
+    $('tab-note').setAttribute('aria-pressed', t === 'note');
+    $('tab-list').setAttribute('aria-pressed', t === 'list');
+    $('new-label').textContent = t === 'list' ? 'New to-do list' : 'New note';
+    $('list-title').textContent = t === 'list' ? 'Your to-do lists' : 'Your notes';
+    $('empty').textContent = t === 'list'
+      ? 'No to-do lists yet. Tap the button above and start talking.'
+      : 'No notes yet. Tap the button above and start talking.';
+    setStatus('');
+    renderList();
+  }
+  $('tab-note').onclick = () => setTab('note');
+  $('tab-list').onclick = () => setTab('list');
+  $('new').onclick = () => startRecording(state.tab, null);
+
   async function renderList() {
-    const items = await DB.all();
+    const items = (await DB.all()).filter(it => (state.tab === 'list') === isList(it));
     const list = $('list');
     list.textContent = '';
     for (const it of items) {
@@ -123,15 +120,25 @@
       const d = document.createElement('span');
       d.className = 'item-date';
       d.textContent = fmtDate(it.createdAt);
-      const t = document.createElement('span');
-      t.className = 'item-text';
-      if (it.format === 'list') {
-        const items = it.text.split('\n').map(s => s.trim()).filter(Boolean);
-        t.textContent = items.length ? '☑ ' + items.join(' · ') : '☑ All done';
+      btn.append(d);
+      if (isList(it)) {
+        const lines = listLines(it.text);
+        for (const line of lines.slice(0, 3)) {
+          const s = document.createElement('span');
+          s.className = 'preview-todo';
+          s.textContent = line;
+          btn.append(s);
+        }
+        const meta = document.createElement('span');
+        meta.className = 'item-meta';
+        meta.textContent = !lines.length ? 'All done' : lines.length === 1 ? '1 item' : lines.length + ' items';
+        btn.append(meta);
       } else {
+        const t = document.createElement('span');
+        t.className = 'item-text';
         t.textContent = it.text || '(empty)';
+        btn.append(t);
       }
-      btn.append(d, t);
       btn.onclick = () => go('detail', it.id);
       li.append(btn);
       list.append(li);
@@ -141,17 +148,19 @@
 
   // ---------- Detail screen ----------
   let saveTimer;
+  let currentFormat = 'text';
   async function openDetail(id) {
     const it = await DB.get(id);
     if (!it) { render('home'); return; }
     state.openId = id;
+    currentFormat = isList(it) ? 'list' : 'text';
     $('detail-date').textContent = fmtDate(it.createdAt);
     $('detail-text').value = it.text;
     $('save-state').textContent = it.updatedAt !== it.createdAt ? 'Edited ' + fmtDate(it.updatedAt) : '';
-    currentFormat = it.format === 'list' ? 'list' : 'text';
-    updateFormatUI();
+    $('words-hint').textContent = isList(it)
+      ? 'Tap a box to tick an item off. Tap a word to correct it.'
+      : 'Tap a word to correct or delete it.';
     setEditAll(false);
-    placeRecorder(state.busy && state.appendTo === id);
     show('detail');
   }
 
@@ -236,28 +245,6 @@
     if (w) openFix(+w.dataset.i);
   };
 
-  // ---------- Text / To-do list format ----------
-  let currentFormat = 'text';
-  function updateFormatUI() {
-    $('fmt-text').setAttribute('aria-pressed', currentFormat === 'text');
-    $('fmt-list').setAttribute('aria-pressed', currentFormat === 'list');
-    $('words-hint').textContent = currentFormat === 'list'
-      ? 'Tap a box to tick an item off. Tap a word to correct it.'
-      : 'Tap a word to correct or delete it.';
-  }
-  async function setFormat(f) {
-    if (f === currentFormat || !state.openId) return;
-    flushTicks();
-    currentFormat = f;
-    updateFormatUI();
-    if (!editingAll) renderWords();
-    const it = await DB.get(state.openId);
-    if (it) { it.format = f; await DB.put(it); }
-    if (f === 'list') toast('Each line is now a to-do item');
-  }
-  $('fmt-text').onclick = () => setFormat('text');
-  $('fmt-list').onclick = () => setFormat('list');
-
   // Ticking items off: they're removed a moment later (so you can tick several),
   // with an Undo button in case of a mistake.
   let tickTimer = null;
@@ -287,6 +274,7 @@
       it.updatedAt = new Date().toISOString();
       await DB.put(it);
       if (state.openId === id) { $('detail-text').value = before; if (!editingAll) renderWords(); }
+      else if (!$('home').hidden) renderList();
     });
   }
 
@@ -294,7 +282,7 @@
   function exportText() {
     const text = $('detail-text').value;
     if (currentFormat !== 'list') return text;
-    return text.split('\n').map(s => s.trim()).filter(Boolean).map(s => '• ' + s).join('\n');
+    return listLines(text).map(s => '• ' + s).join('\n');
   }
 
   function openFix(i) {
@@ -306,6 +294,9 @@
     if (span) span.classList.add('sel');
     $('fix-was').textContent = word;
     $('fix-input').value = word;
+    $('fix-always-word').textContent = word;
+    $('fix-always').checked = true;
+    $('fix-always-row').hidden = !core;
     $('fix-sheet').hidden = false;
     $('fix-input').focus();
     $('fix-input').select(); // typing replaces the whole word
@@ -328,7 +319,12 @@
     if (replacement) {
       tokens[i] = core ? pre + replacement + suf : replacement;
       flash = i;
-      toast('Corrected');
+      if (core && replacement !== core && $('fix-always').checked) {
+        rememberFix(core, replacement);
+        toast('Corrected. It’ll be fixed automatically from now on.');
+      } else {
+        toast('Corrected');
+      }
     } else {
       // Delete the word. Keep punctuation after it (e.g. "milk extra." → "milk.")
       // and remove one of the spaces around it.
@@ -359,6 +355,59 @@
     else if (e.key === 'Escape') closeFix();
   };
 
+  // ---------- Remembered word fixes ----------
+  // Correcting a word with "Always fix" ticked saves the swap (e.g. Lawrence → Laurence),
+  // and it's made automatically in everything recorded after that.
+  function loadFixes() { try { return JSON.parse(read('fixes', '{}')) || {}; } catch { return {}; } }
+  function saveFixes(f) { write('fixes', JSON.stringify(f)); }
+  function rememberFix(from, to) {
+    const f = loadFixes();
+    f[from.toLowerCase()] = to;
+    saveFixes(f);
+  }
+  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function applyFixes(t) {
+    const f = loadFixes();
+    const keys = Object.keys(f).sort((a, b) => b.length - a.length); // longest first
+    if (!keys.length || !t) return t;
+    // Whole words only, any capitalisation: "Lawrence" and "lawrence" both match, "Lawrences" doesn't.
+    const re = new RegExp(`(?<![\\p{L}\\p{N}'’])(?:${keys.map(escapeRe).join('|')})(?![\\p{L}\\p{N}'’])`, 'giu');
+    return t.replace(re, m => {
+      const to = f[m.toLowerCase()];
+      if (to == null) return m;
+      // Keep a capital at the start of a sentence: "Wool" → "Woolies" even if saved as "woolies".
+      return /^\p{Lu}/u.test(m) && /^\p{Ll}/u.test(to) ? to[0].toUpperCase() + to.slice(1) : to;
+    });
+  }
+
+  function renderFixes() {
+    const f = loadFixes();
+    const list = $('fixes');
+    list.textContent = '';
+    for (const from of Object.keys(f).sort()) {
+      const li = document.createElement('li');
+      const pair = document.createElement('span');
+      pair.className = 'fix-pair';
+      const was = document.createElement('s');
+      was.textContent = from;
+      pair.append(was, ' → ', f[from]);
+      const del = document.createElement('button');
+      del.className = 'fix-remove';
+      del.textContent = '×';
+      del.setAttribute('aria-label', `Stop fixing ${from}`);
+      del.onclick = () => {
+        const now = loadFixes();
+        delete now[from];
+        saveFixes(now);
+        renderFixes();
+        toast('Removed');
+      };
+      li.append(pair, del);
+      list.append(li);
+    }
+    $('fixes-empty').hidden = list.children.length > 0;
+  }
+
   // "Edit all text" switches to a normal text box for bigger changes.
   function setEditAll(on) {
     editingAll = on;
@@ -374,12 +423,11 @@
     else setEditAll(true);
   };
 
-  // "Continue recording": record more and add it to the end of this transcript.
+  // "Continue recording": record more and add it to the end of this note or list.
   $('continue').onclick = async () => {
+    flushTicks();
     await saveDetailNow();
-    state.appendTo = state.openId;
-    placeRecorder(true);
-    startRecording();
+    startRecording(currentFormat === 'list' ? 'list' : 'note', state.openId);
   };
   async function saveDetailNow() {
     clearTimeout(saveTimer);
@@ -418,7 +466,7 @@
     }
   };
   $('delete').onclick = async () => {
-    if (!confirm('Delete this transcript? This cannot be undone.')) return;
+    if (!confirm(currentFormat === 'list' ? 'Delete this to-do list? This cannot be undone.' : 'Delete this note? This cannot be undone.')) return;
     clearTimeout(saveTimer);
     await DB.remove(state.openId);
     state.openId = null;
@@ -427,115 +475,8 @@
   };
   $('back').onclick = () => { saveDetailNow(); history.back(); };
 
-  // ---------- Settings screen ----------
-  const hasFastMode = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-  function renderSettings() {
-    for (const r of document.querySelectorAll('input[name=mode]')) {
-      r.checked = r.value === settings.mode;
-      if (r.value === 'fast' && !hasFastMode) {
-        r.disabled = true;
-        r.nextElementSibling.lastChild.textContent = ' Not available in this browser.';
-      }
-    }
-    for (const r of document.querySelectorAll('input[name=model]')) r.checked = r.value === settings.model;
-  }
-  for (const r of document.querySelectorAll('input[name=mode]')) r.onchange = () => { settings.mode = r.value; updateHome(); };
-  for (const r of document.querySelectorAll('input[name=model]')) r.onchange = () => { settings.model = r.value; updateHome(); preloadModel(); };
   $('open-settings').onclick = () => go('settings');
   $('settings-back').onclick = () => history.back();
-
-  function updateHome() {
-    const priv = settings.mode === 'private' || !hasFastMode;
-    $('mode-badge').textContent = priv ? '🔒 Private mode: stays on this phone' : '⚡ Fast mode: voice is sent to Google';
-    $('model-size').textContent = MODEL_SIZES[settings.model];
-    $('model-card').hidden = !priv || settings.isDownloaded(settings.model);
-  }
-
-  // ---------- Whisper (private mode) ----------
-  let worker = null;
-  let workerResolve = null, workerReject = null;
-  function getWorker() {
-    if (worker) return worker;
-    worker = new Worker('whisper-worker.js', { type: 'module' });
-    worker.onmessage = ({ data }) => {
-      if (data.type === 'progress') {
-        setStatus(settings.isDownloaded(settings.model)
-          ? `Loading speech model… ${Math.round((data.loaded / data.total) * 100)}%`
-          : `Downloading speech model… ${Math.round(data.loaded / 1048576)} of ${Math.round(data.total / 1048576)} MB`);
-        setProgress(data.loaded / data.total);
-      } else if (data.type === 'ready') {
-        settings.markDownloaded(data.model);
-        setProgress(null);
-        updateHome();
-        if (!state.busy) setStatus('Speech model ready');
-      } else if (data.type === 'working') {
-        startProcessingTimer();
-      } else if (data.type === 'result') {
-        workerResolve && workerResolve(data.text);
-      } else if (data.type === 'error') {
-        setProgress(null);
-        if (workerReject) workerReject(new Error(data.message));
-        else setStatus('Could not load the speech model. Check your internet connection and try again.');
-      }
-    };
-    worker.onerror = e => {
-      if (workerReject) workerReject(new Error(e.message || 'Worker failed to start'));
-      else setStatus('Could not start the speech model. Check your internet connection.');
-      worker = null;
-    };
-    return worker;
-  }
-
-  function preloadModel() {
-    getWorker().postMessage({ type: 'load', model: settings.model });
-  }
-  $('download-model').onclick = () => {
-    $('download-model').disabled = true;
-    setStatus('Starting download…');
-    preloadModel();
-  };
-
-  let processingTimer;
-  function startProcessingTimer() {
-    const start = Date.now();
-    clearInterval(processingTimer);
-    const tick = () => setStatus(`Turning speech into text… ${Math.round((Date.now() - start) / 1000)}s`);
-    tick();
-    processingTimer = setInterval(tick, 1000);
-  }
-
-  function whisperTranscribe(audio) {
-    return new Promise((resolve, reject) => {
-      workerResolve = resolve;
-      workerReject = reject;
-      // Send a copy so the original stays available for "Try again".
-      const copy = audio.slice();
-      getWorker().postMessage({ type: 'transcribe', model: settings.model, audio: copy, id: newId() }, [copy.buffer]);
-    }).finally(() => {
-      workerResolve = workerReject = null;
-      clearInterval(processingTimer);
-    });
-  }
-
-  // Convert a recording into 16 kHz mono samples, the format Whisper expects.
-  async function decodeTo16k(blob) {
-    const buf = await blob.arrayBuffer();
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    try {
-      const audio = await ctx.decodeAudioData(buf);
-      if (audio.numberOfChannels === 1) return audio.getChannelData(0);
-      const a = audio.getChannelData(0), b = audio.getChannelData(1);
-      const mono = new Float32Array(a.length);
-      for (let i = 0; i < a.length; i++) mono[i] = (a[i] + b[i]) / 2;
-      return mono;
-    } finally {
-      ctx.close();
-    }
-  }
-
-  function cleanWhisperText(t) {
-    return applyVoiceCommands(t.replace(/\[(BLANK_AUDIO|MUSIC|NOISE|SILENCE)\]/gi, ''));
-  }
 
   // Spoken commands: saying "new line" starts a new line.
   // "Buy milk. New line. Call the dentist." becomes "Buy milk.\nCall the dentist."
@@ -554,95 +495,53 @@
   }
 
   // ---------- Recording ----------
-  let media = null, recorder = null, chunks = [], timer = null, startedAt = 0;
-  let recognition = null, finals = [], interim = '';
+  // Uses the browser's built-in speech recognition (Google on Android Chrome).
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null, finals = [], interim = '', timer = null, startedAt = 0;
 
-  function setRecordingUI(on) {
-    $('record').classList.toggle('recording', on);
-    $('record').setAttribute('aria-label', on ? 'Stop recording' : 'Start recording');
-    if (!on) $('record-label').textContent = recorderInDetail() ? 'Tap to record more' : 'Tap to record';
-  }
+  async function startRecording(kind, appendTo) {
+    if (!SR) {
+      setStatus('This browser can’t turn speech into text. Please open the app in Chrome.');
+      return;
+    }
+    state.kind = kind;
+    state.appendTo = appendTo;
+    state.before = '';
+    if (appendTo) {
+      const it = await DB.get(appendTo);
+      state.before = it ? it.text : '';
+    }
+    const list = kind === 'list';
+    $('rec-title').textContent = appendTo ? (list ? 'Add to list' : 'Add to note') : (list ? 'New to-do list' : 'New note');
+    $('rec-live').className = 'live-card' + (list ? '' : ' note');
+    $('newline').hidden = !list;
+    $('rec-hint').textContent = list
+      ? 'Say an item, tap New line, say the next one. Tap the stop button when you’re done.'
+      : 'Tap the stop button when you’re done.';
+    history.pushState({ view: 'rec' }, '');
+    show('rec');
 
-  function startTimer() {
-    startedAt = Date.now();
-    const tick = () => ($('record-label').textContent = '● ' + fmtTime((Date.now() - startedAt) / 1000) + ' – tap to stop');
-    tick();
-    timer = setInterval(tick, 500);
-  }
-
-  async function startRecording() {
-    $('retry').hidden = true;
-    state.lastAudio = null;
-    const priv = settings.mode === 'private' || !hasFastMode;
+    finals = []; interim = '';
     try {
-      if (priv) await startWhisperRecording();
-      else startFastRecording();
+      startRecognition();
     } catch (e) {
-      setBusy(false);
-      setRecordingUI(false);
-      state.recording = false;
-      setStatus(e.name === 'NotAllowedError'
-        ? 'Microphone blocked. Tap the icon left of the address bar, allow the microphone, then try again.'
-        : 'Could not start recording: ' + e.message);
+      history.back();
+      toast('Could not start recording: ' + e.message);
       return;
     }
     state.recording = true;
     setBusy(true);
-    setRecordingUI(true);
-    startTimer();
+    $('record').classList.add('recording');
+    startedAt = Date.now();
+    const tickClock = () => ($('record-label').textContent = fmtTime((Date.now() - startedAt) / 1000));
+    tickClock();
+    timer = setInterval(tickClock, 500);
+    showLive();
   }
 
-  async function startWhisperRecording() {
-    media = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-    chunks = [];
-    recorder = new MediaRecorder(media);
-    recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
-    recorder.start(1000);
-    setStatus(settings.isDownloaded(settings.model) ? 'Listening…' : 'Listening… (the speech model will download in the background)');
-    preloadModel(); // gets the model ready while you talk
-  }
-
-  async function stopWhisperRecording() {
-    await new Promise(r => { recorder.onstop = r; recorder.stop(); });
-    media.getTracks().forEach(t => t.stop());
-    const blob = new Blob(chunks, { type: recorder.mimeType });
-    recorder = media = null;
-    setStatus('Preparing audio…');
-    const audio = await decodeTo16k(blob);
-    state.lastAudio = audio;
-    await transcribeAndSave(audio);
-  }
-
-  async function transcribeAndSave(audio) {
-    $('record').disabled = true;
-    $('retry').hidden = true;
-    setBusy(true);
-    if (!settings.isDownloaded(settings.model)) setStatus('Waiting for the speech model to download…');
-    try {
-      const text = cleanWhisperText(await whisperTranscribe(audio));
-      state.lastAudio = null;
-      setStatus('');
-      if (!text) { state.appendTo = null; toast('No speech heard. Try again closer to the mic.'); return; }
-      await saveResult(text, 'private', audio.length / 16000);
-    } catch (e) {
-      setStatus('Something went wrong: ' + e.message + '. Your recording is kept, tap "Try again".');
-      $('retry').hidden = false;
-    } finally {
-      setProgress(null);
-      $('record').disabled = false;
-      setBusy(false);
-      // Done (unless it failed and "Try again" is showing): put the record button back.
-      if (!state.lastAudio && recorderInDetail()) placeRecorder(false);
-    }
-  }
-  $('retry').onclick = () => state.lastAudio && transcribeAndSave(state.lastAudio);
-
-  // Fast mode: the browser's built-in recogniser (audio is sent to Google).
-  function startFastRecording() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    finals = []; interim = '';
+  function startRecognition() {
     recognition = new SR();
-    recognition.lang = (navigator.language || '').startsWith('en') ? navigator.language : 'en-US';
+    recognition.lang = 'en-ZA'; // South African English: better with local accents, names and places
     recognition.interimResults = true;
     // One phrase per session, restarted automatically. This avoids repeated
     // words that Android Chrome produces in "continuous" mode.
@@ -658,28 +557,70 @@
     };
     recognition.onerror = e => {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        setStatus('Microphone blocked. Allow the microphone for this site and try again.');
+        toast('Microphone blocked. Allow the microphone for this site and try again.');
         stopRecording();
       } else if (e.error === 'network') {
-        setStatus('Fast mode needs an internet connection. Switch to Private mode in Settings to work offline.');
+        toast('Speech-to-text needs an internet connection.');
         stopRecording();
       }
     };
     recognition.onend = () => {
-      if (interim) { finals.push(interim.trim()); interim = ''; }
+      if (interim) { finals.push(interim.trim()); interim = ''; showLive(); }
       if (state.recording && recognition) { try { recognition.start(); } catch {} }
       else if (recognitionDone) { recognitionDone(); recognitionDone = null; }
     };
     recognition.start();
-    $('live-text').hidden = false;
-    $('live-text').textContent = '';
-    setStatus('Listening…');
   }
+
+  // What's been said so far, with voice commands and remembered word fixes applied.
+  const spokenText = () => applyFixes(applyVoiceCommands([...finals, interim].filter(Boolean).join(' ')));
+
+  // "New line" button (to-do lists): the next words start a new item.
+  // Whatever is still being recognised is kept on the current line, and the
+  // recogniser restarts so its late result can't land on the new line.
+  $('newline').onclick = () => {
+    if (!state.recording) return;
+    if (!spokenText().split('\n').pop().trim()) return; // nothing said on this line yet
+    if (interim) {
+      finals.push(interim.trim());
+      interim = '';
+      try { recognition.abort(); } catch {}
+    }
+    finals.push('\n');
+    showLive();
+  };
+
   function showLive() {
-    $('live-text').textContent = applyVoiceCommands([...finals, interim].filter(Boolean).join(' '));
+    const box = $('rec-live');
+    const said = spokenText();
+    box.textContent = '';
+    if (state.kind !== 'list') {
+      const text = [state.before.trim(), said].filter(Boolean).join(' ');
+      if (text) box.textContent = text;
+      else box.innerHTML = '<p class="placeholder">Listening…</p>';
+    } else {
+      // Earlier items, then what's being said now; the last line is the one being filled.
+      const lines = [...listLines(state.before), ...said.split('\n').map(s => s.trim())];
+      const ul = document.createElement('ul');
+      ul.className = 'todo-list';
+      lines.forEach((text, i) => {
+        const li = document.createElement('li');
+        li.className = 'todo' + (i === lines.length - 1 ? ' current' : '');
+        li.innerHTML = '<span class="check" aria-hidden="true"></span><span class="todo-text"></span>';
+        li.querySelector('.todo-text').textContent = capitalise(text);
+        ul.append(li);
+      });
+      box.append(ul);
+    }
+    window.scrollTo(0, document.body.scrollHeight); // keep the newest words in view
   }
+
   let recognitionDone = null;
-  async function stopFastRecording() {
+  async function stopRecording() {
+    if (!state.recording) return;
+    state.recording = false;
+    clearInterval(timer);
+    $('record').classList.remove('recording');
     const rec = recognition;
     await new Promise(r => {
       recognitionDone = r;
@@ -687,83 +628,101 @@
       setTimeout(r, 2500); // don't hang if the browser never says it's finished
     });
     recognition = null;
-    $('live-text').hidden = true;
-    const text = applyVoiceCommands(finals.filter(Boolean).join(' '));
-    setStatus('');
-    if (!text) state.appendTo = null, toast('No speech heard. Try again.');
-    else await saveResult(text, 'fast', (Date.now() - startedAt) / 1000);
-    if (recorderInDetail()) placeRecorder(false);
-  }
-
-  async function stopRecording() {
-    if (!state.recording) return;
-    state.recording = false;
-    clearInterval(timer);
-    setRecordingUI(false);
+    const text = spokenText().replace(/\n{2,}/g, '\n').replace(/^\n+|\n+$/g, '');
+    let newItemId = null;
     try {
-      if (recorder) await stopWhisperRecording();
-      else if (recognition) await stopFastRecording();
+      if (!text) toast('No speech heard. Try again.');
+      else newItemId = await saveResult(text, (Date.now() - startedAt) / 1000);
     } catch (e) {
-      setStatus('Could not process the recording: ' + e.message);
-    } finally {
-      if (!$('record').disabled) setBusy(false);
+      toast('Could not save: ' + e.message);
+    }
+    setBusy(false);
+    leaveRec(newItemId);
+  }
+  $('record').onclick = stopRecording;
+  $('rec-back').onclick = stopRecording;
+
+  // Leave the recording screen. A new item replaces it in the history, so Back
+  // from the new item goes home. Otherwise go back to where recording started.
+  function leaveRec(newItemId) {
+    const onRec = (history.state || {}).view === 'rec';
+    if (newItemId) {
+      history[onRec ? 'replaceState' : 'pushState']({ view: 'detail', id: newItemId }, '');
+      render('detail', newItemId);
+    } else if (onRec) {
+      history.back(); // popstate shows the previous screen
+    } else {
+      render(state.appendTo ? 'detail' : 'home', state.appendTo); // Back was pressed: already there
     }
   }
 
-  $('record').onclick = () => {
-    if (state.recording) return stopRecording();
-    if (!recorderInDetail()) state.appendTo = null; // home screen = new transcript
-    startRecording();
-  };
-
-  // Save the result: add it to the transcript being continued, or make a new one.
-  async function saveResult(text, mode, seconds) {
+  // Save the result: add it to the note/list being continued, or make a new one.
+  // Returns the id of a newly made item.
+  async function saveResult(text, seconds) {
     const id = state.appendTo;
-    state.appendTo = null;
     const it = id && await DB.get(id);
-    if (!it) return saveNew(text, mode, seconds);
-    const onScreen = state.openId === id && !$('detail').hidden;
-    if (onScreen) { clearTimeout(saveTimer); it.text = $('detail-text').value; } // include any unsaved edits
+    if (!it) return saveNew(text, seconds);
     const before = it.text.replace(/[ \t]+$/, '');
     // Join with a space, unless either side is already a new line.
     // In a to-do list, each new recording starts a new item.
-    const joiner = !before || before.endsWith('\n') || text.startsWith('\n') ? '' : it.format === 'list' ? '\n' : ' ';
-    if (it.format === 'list') text = text.replace(/^(\n*)([a-z])/, (m, nl, c) => nl + c.toUpperCase());
+    const joiner = !before || before.endsWith('\n') || text.startsWith('\n') ? '' : isList(it) ? '\n' : ' ';
+    if (isList(it)) text = capitalise(text);
     it.text = before + joiner + text;
     it.updatedAt = new Date().toISOString();
     it.seconds = (it.seconds || 0) + Math.round(seconds);
     await DB.put(it);
-    toast('Added to transcript');
-    if (onScreen) {
-      const ta = $('detail-text');
-      ta.value = it.text;
-      ta.scrollTop = ta.scrollHeight;
-      if (!editingAll) {
-        renderWords();
-        $('detail-words').scrollTop = $('detail-words').scrollHeight;
-      }
-      $('save-state').textContent = 'Saved';
-    } else {
-      go('detail', id);
-    }
+    toast(isList(it) ? 'Added to list' : 'Added to note');
+    return null;
   }
 
-  async function saveNew(text, mode, seconds) {
-    // A new transcript starts with a capital letter, not a blank line.
-    text = text.replace(/^\n+/, '').replace(/^[a-z]/, c => c.toUpperCase());
+  async function saveNew(text, seconds) {
+    // A new note starts with a capital letter, not a blank line.
+    text = capitalise(text.replace(/^\n+/, ''));
     const now = new Date().toISOString();
-    const item = { id: newId(), createdAt: now, updatedAt: now, text, mode, seconds: Math.round(seconds) };
+    const item = { id: newId(), createdAt: now, updatedAt: now, text, mode: 'google', seconds: Math.round(seconds) };
+    if (state.kind === 'list') item.format = 'list';
     await DB.put(item);
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    setTab(state.kind); // so Back from the new item lands on its tab
     toast('Saved');
-    go('detail', item.id);
+    return item.id;
+  }
+
+  // ---------- Accent colour ----------
+  // One colour for buttons, tabs, the record button and highlights. Chosen in Settings.
+  const ACCENTS = [
+    { id: 'terracotta', name: 'Terracotta', color: '#c2552d' },
+    { id: 'ocean', name: 'Ocean', color: '#2f6db5' },
+    { id: 'forest', name: 'Forest', color: '#2f7a4f' },
+    { id: 'plum', name: 'Plum', color: '#8a3f86' },
+    { id: 'raspberry', name: 'Raspberry', color: '#c2185b' },
+    { id: 'ink', name: 'Ink', color: '#2a2420' },
+  ];
+  const currentAccent = () => ACCENTS.find(a => a.id === read('accent', '')) || ACCENTS[0];
+  function applyAccent() {
+    document.documentElement.style.setProperty('--accent', currentAccent().color);
+  }
+  function renderAccents() {
+    const box = $('accents');
+    box.textContent = '';
+    for (const a of ACCENTS) {
+      const b = document.createElement('button');
+      b.className = 'swatch';
+      b.style.background = a.color;
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', a.id === currentAccent().id);
+      b.setAttribute('aria-label', a.name);
+      b.onclick = () => { write('accent', a.id); applyAccent(); renderAccents(); };
+      box.append(b);
+    }
+    $('accent-name').textContent = currentAccent().name;
   }
 
   // ---------- Backup & restore ----------
   $('backup').onclick = async () => {
     const items = await DB.all();
     if (!items.length) { toast('Nothing to back up yet'); return; }
-    const data = JSON.stringify({ app: 'voice-notes', appVersion: VERSION, exportedAt: new Date().toISOString(), transcripts: items }, null, 1);
+    const data = JSON.stringify({ app: 'voice-notes', appVersion: VERSION, exportedAt: new Date().toISOString(), transcripts: items, fixes: loadFixes() }, null, 1);
     const name = `voice-notes-backup-${new Date().toISOString().slice(0, 10)}.txt`;
     // Saved as .txt because Android's share menu accepts text files (it refuses .json).
     const file = new File([data], name, { type: 'text/plain' });
@@ -795,6 +754,8 @@
         else if ((t.updatedAt || '') > (existing.updatedAt || '')) { await DB.put(t); updated++; }
         else kept++;
       }
+      // Word fixes: add the backup's, but keep any made on this phone.
+      if (data.fixes && typeof data.fixes === 'object') saveFixes({ ...data.fixes, ...loadFixes() });
       toast(`Restored: ${added} added, ${updated} updated, ${kept} already here`);
     } catch (err) {
       toast('Could not restore: ' + err.message);
@@ -808,8 +769,7 @@
   if ('serviceWorker' in navigator) {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      // On first install we still reload once, so the speed-up headers take effect.
-      if (!hadController && self.crossOriginIsolated) return;
+      if (!hadController) return; // first install: nothing to update
       if (state.busy) state.pendingReload = true;
       else location.reload();
     });
@@ -822,16 +782,10 @@
 
   // ---------- Start ----------
   for (const el of document.querySelectorAll('.app-version')) el.textContent = VERSION;
-  // Tell the user when the app has just updated itself to a new version.
-  const seen = read('seen-version', '');
-  if (seen && seen !== VERSION) setTimeout(() => toast('Updated to v' + VERSION), 300);
-  write('seen-version', VERSION);
+  applyAccent();
   history.replaceState({ view: 'home' }, '');
-  updateHome();
-  renderList();
-  // If the model was downloaded before, warm it up now so the first recording is quick.
-  if ((settings.mode === 'private' || !hasFastMode) && settings.isDownloaded(settings.model)) preloadModel();
+  setTab('note');
 
   // Exposed for testing only.
-  window.VoiceNotes = { transcribeAndSave, decodeTo16k, state, placeRecorder, applyVoiceCommands };
+  window.VoiceNotes = { state, applyVoiceCommands };
 })();

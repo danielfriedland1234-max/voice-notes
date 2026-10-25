@@ -4,54 +4,68 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Voice Notes</title>
-  <meta name="description" content="Private voice transcription that stays on your device.">
-  <meta name="theme-color" content="#121317">
+  <meta name="description" content="Quick voice notes and to-do lists.">
+  <meta name="theme-color" content="#f5efe3">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;600;800&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Home: record button + list of transcripts -->
+  <!-- Home: Notes / To-do tabs, each with a New button and a list -->
   <main id="home" class="view">
     <header class="topbar">
       <h1>Voice Notes</h1>
-      <span class="version-tag">v<span class="app-version"></span></span>
       <button id="open-settings" class="icon-btn" aria-label="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
       </button>
     </header>
 
-    <section id="model-card" class="card notice" hidden>
-      <p><strong>One-time setup:</strong> private mode needs a speech model downloaded to this phone (about <span id="model-size">80 MB</span>). Use Wi-Fi if you can.</p>
-      <button id="download-model" class="btn primary">Download speech model</button>
-    </section>
-
-    <div id="home-recorder-slot">
-    <section id="recorder" class="recorder">
-      <button id="record" class="record-btn" aria-label="Start recording">
-        <span class="record-icon" aria-hidden="true"></span>
-      </button>
-      <p id="record-label" class="record-label">Tap to record</p>
-      <p id="status" class="status" role="status" aria-live="polite"></p>
-      <div id="progress" class="progress" hidden><div id="progress-bar"></div></div>
-      <button id="retry" class="btn primary" hidden>Try again</button>
-      <p id="live-text" class="live-text" hidden></p>
-      <p id="mode-badge" class="mode-badge"></p>
-      <p class="mode-badge">Tip: say “new line” to start a new line.</p>
-    </section>
+    <div class="segmented tabs" role="tablist" aria-label="Show">
+      <button id="tab-note" class="seg" role="tab" aria-pressed="true">¶ Notes</button>
+      <button id="tab-list" class="seg" role="tab" aria-pressed="false">☑ To-do</button>
     </div>
 
+    <button id="new" class="btn primary wide new-btn"><span class="plus" aria-hidden="true">+</span><span id="new-label">New note</span></button>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
     <section>
-      <h2 class="list-title">Your transcripts</h2>
+      <h2 id="list-title" class="list-title">Your notes</h2>
       <ul id="list" class="list"></ul>
-      <p id="empty" class="empty">No transcripts yet. Tap the button above and start talking.</p>
+      <p id="empty" class="empty"></p>
     </section>
 
     <footer class="version">v<span class="app-version"></span></footer>
   </main>
 
-  <!-- One transcript: view, edit, copy, share, delete -->
+  <!-- Recording a new note / to-do list, or adding to one -->
+  <section id="rec" class="view" hidden>
+    <header class="topbar">
+      <button id="rec-back" class="icon-btn" aria-label="Stop and save">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg>
+      </button>
+      <h1 id="rec-title" class="detail-date">New note</h1>
+      <span class="icon-btn-spacer"></span>
+    </header>
+
+    <div id="rec-live" class="live-card"></div>
+
+    <div class="rec-controls">
+      <div class="recorder compact">
+        <button id="record" class="record-btn" aria-label="Stop recording">
+          <span class="record-icon" aria-hidden="true"></span>
+        </button>
+        <p id="record-label" class="record-label">0:00</p>
+      </div>
+      <button id="newline" class="btn primary newline-btn" hidden><span class="key" aria-hidden="true">↵</span>New line</button>
+      <p id="rec-hint" class="rec-hint"></p>
+    </div>
+  </section>
+
+  <!-- One note or to-do list: view, edit, copy, share, delete -->
   <section id="detail" class="view" hidden>
     <header class="topbar">
       <button id="back" class="icon-btn" aria-label="Back">
@@ -60,27 +74,21 @@
       <h1 id="detail-date" class="detail-date"></h1>
       <span class="icon-btn-spacer"></span>
     </header>
-    <div class="segmented" role="group" aria-label="Show as">
-      <button id="fmt-text" class="seg" aria-pressed="true">¶ Text</button>
-      <button id="fmt-list" class="seg" aria-pressed="false">☑ To-do list</button>
-    </div>
-    <p id="words-hint" class="hint">Tap a word to correct or delete it.</p>
+    <p id="words-hint" class="hint"></p>
     <!-- Reading view: every word can be tapped to fix it -->
-    <div id="detail-words" class="detail-text detail-words" aria-label="Transcript text"></div>
+    <div id="detail-words" class="detail-text detail-words" aria-label="Text"></div>
     <!-- Full editing view, for bigger changes -->
-    <textarea id="detail-text" class="detail-text" aria-label="Transcript text" hidden></textarea>
+    <textarea id="detail-text" class="detail-text" aria-label="Text" hidden></textarea>
     <div class="row-between">
       <p id="save-state" class="save-state"></p>
       <button id="edit-all" class="link-btn">✎ Edit all text</button>
     </div>
     <button id="continue" class="btn wide record-more"><span class="dot" aria-hidden="true"></span>Continue recording</button>
-    <!-- While continuing, the record button moves here so the text stays in view -->
-    <div id="detail-recorder-slot"></div>
     <div class="actions">
       <button id="copy" class="btn primary">Copy</button>
       <button id="share" class="btn primary">Share</button>
     </div>
-    <button id="delete" class="btn danger wide">Delete transcript</button>
+    <button id="delete" class="btn danger wide">Delete</button>
   </section>
 
   <!-- Settings -->
@@ -94,36 +102,25 @@
     </header>
 
     <div class="card">
-      <h2>Speech recognition</h2>
-      <label class="choice">
-        <input type="radio" name="mode" value="private">
-        <span><strong>Private (recommended)</strong><br>Runs on this phone. Your voice never leaves it. Text appears after you stop.</span>
-      </label>
-      <label class="choice">
-        <input type="radio" name="mode" value="fast">
-        <span><strong>Fast</strong><br>Text appears as you speak, but your voice is sent to Google to be recognised.</span>
-      </label>
-    </div>
-
-    <div class="card">
-      <h2>Private model</h2>
-      <label class="choice">
-        <input type="radio" name="model" value="base">
-        <span><strong>Standard</strong><br>Better accuracy. About 80 MB download.</span>
-      </label>
-      <label class="choice">
-        <input type="radio" name="model" value="tiny">
-        <span><strong>Quick</strong><br>Faster, less accurate. About 45 MB download.</span>
-      </label>
+      <h2>Accent colour</h2>
+      <div id="accents" class="accents" role="radiogroup" aria-label="Accent colour"></div>
+      <p id="accent-name" class="accent-name"></p>
     </div>
 
     <div class="card">
       <h2>Backup &amp; restore</h2>
-      <p>Backup creates one file with all your transcripts. In the share menu, choose <strong>Drive</strong> to save it to Google Drive.</p>
-      <button id="backup" class="btn primary wide">Back up transcripts</button>
-      <p>To restore on a new phone, tap below and pick the backup file from Drive. Existing transcripts are kept.</p>
+      <p>Backup creates one file with all your notes and lists. In the share menu, choose <strong>Drive</strong> to save it to Google Drive.</p>
+      <button id="backup" class="btn primary wide">Back up</button>
+      <p>To restore on a new phone, tap below and pick the backup file from Drive. Existing notes are kept.</p>
       <button id="restore" class="btn wide">Restore from backup</button>
       <input id="restore-file" type="file" accept=".txt,.json,text/plain,application/json" hidden>
+    </div>
+
+    <div class="card">
+      <h2>Word fixes</h2>
+      <p>Words the app corrects for you automatically when you record.</p>
+      <ul id="fixes" class="fixes"></ul>
+      <p id="fixes-empty" class="fixes-empty">None yet. When you tap a word to correct it, leave “Always fix” ticked and it’s fixed for you next time.</p>
     </div>
 
     <p class="version">Voice Notes v<span class="app-version"></span></p>
@@ -135,6 +132,10 @@
       <h2 id="fix-title">Correct word</h2>
       <p class="sheet-was">Heard as: <strong id="fix-was"></strong></p>
       <input id="fix-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="true" enterkeyhint="done" aria-label="Correct word">
+      <label id="fix-always-row" class="always">
+        <input id="fix-always" type="checkbox" checked>
+        <span>Always fix “<span id="fix-always-word"></span>” from now on</span>
+      </label>
       <div class="actions">
         <button id="fix-delete" class="btn danger">Delete word</button>
         <button id="fix-save" class="btn primary">Save</button>
