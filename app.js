@@ -75,6 +75,7 @@
     render(view, id);
   }
   function render(view, id) {
+    if (unsaved) saveDetailNow(); // e.g. the phone's Back button pressed right after typing
     flushTicks(); // finish removing ticked items before leaving the screen
     closeFix();
     if (view === 'detail') openDetail(id);
@@ -117,6 +118,12 @@
       const li = document.createElement('li');
       const btn = document.createElement('button');
       btn.className = 'item';
+      if (it.title) {
+        const h = document.createElement('span');
+        h.className = 'item-title';
+        h.textContent = it.title;
+        btn.append(h);
+      }
       const d = document.createElement('span');
       d.className = 'item-date';
       d.textContent = fmtDate(it.createdAt);
@@ -147,7 +154,7 @@
   }
 
   // ---------- Detail screen ----------
-  let saveTimer;
+  let saveTimer, unsaved = false;
   let currentFormat = 'text';
   async function openDetail(id) {
     const it = await DB.get(id);
@@ -156,6 +163,7 @@
     currentFormat = isList(it) ? 'list' : 'text';
     $('detail-date').textContent = fmtDate(it.createdAt);
     $('detail-text').value = it.text;
+    $('detail-title').value = it.title || '';
     $('save-state').textContent = it.updatedAt !== it.createdAt ? 'Edited ' + fmtDate(it.updatedAt) : '';
     $('words-hint').textContent = isList(it)
       ? 'Tap a box to tick an item off. Tap a word to correct it.'
@@ -167,7 +175,7 @@
   // ---------- Tap a word to correct or delete it ----------
   // The text is split into words and the spaces/line breaks between them.
   // Punctuation stuck to a word ("milk." or "(note") is kept when you fix it.
-  let tokens = [], fixIndex = -1, editingAll = false;
+  let tokens = [], editingAll = false;
   const PUNCT_START = /^[("'“‘[]+/;
   const PUNCT_END = /[.,!?;:)"'”’…\]]+$/;
   const isSpace = t => /^\s+$/.test(t || '');
@@ -278,73 +286,159 @@
     });
   }
 
-  // Text for Copy/Share: to-do lists get a bullet in front of each item.
+  // Text for Copy/Share: the title (if any) on top, and to-do lists get a bullet in front of each item.
   function exportText() {
-    const text = $('detail-text').value;
-    if (currentFormat !== 'list') return text;
-    return listLines(text).map(s => '• ' + s).join('\n');
+    let text = $('detail-text').value;
+    if (currentFormat === 'list') text = listLines(text).map(s => '• ' + s).join('\n');
+    const title = $('detail-title').value.trim();
+    return title ? title + '\n\n' + text : text;
+  }
+
+  // The words being corrected: token indices fixStart..fixEnd. Usually one word, but
+  // "+ word before / after" grows it, because Google often splits an unusual name
+  // into several words ("Seberini" heard as "sever Rini").
+  let fixStart = -1, fixEnd = -1;
+  const isWord = t => !!t && !isSpace(t);
+  const sameLine = t => isSpace(t) && !t.includes('\n');
+  const canGrow = dir => dir < 0
+    ? sameLine(tokens[fixStart - 1]) && isWord(tokens[fixStart - 2])
+    : sameLine(tokens[fixEnd + 1]) && isWord(tokens[fixEnd + 2]);
+  // The selected words without punctuation at either end, e.g. "sever Rini".
+  function fixPhrase() {
+    return tokens.slice(fixStart, fixEnd + 1).join('')
+      .replace(PUNCT_START, '').replace(PUNCT_END, '').replace(/\s+/g, ' ').trim();
   }
 
   function openFix(i) {
-    fixIndex = i;
-    const { core } = splitToken(tokens[i]);
-    const word = core || tokens[i];
-    for (const s of document.querySelectorAll('.w.sel')) s.classList.remove('sel');
-    const span = document.querySelector(`.w[data-i="${i}"]`);
-    if (span) span.classList.add('sel');
-    $('fix-was').textContent = word;
-    $('fix-input').value = word;
-    $('fix-always-word').textContent = word;
+    fixStart = fixEnd = i;
+    updateFixSheet();
     $('fix-always').checked = true;
-    $('fix-always-row').hidden = !core;
     $('fix-sheet').hidden = false;
     $('fix-input').focus();
     $('fix-input').select(); // typing replaces the whole word
   }
 
+  function updateFixSheet() {
+    const heard = fixPhrase();
+    for (const s of document.querySelectorAll('.w.sel')) s.classList.remove('sel');
+    for (let k = fixStart; k <= fixEnd; k++) {
+      const span = document.querySelector(`.w[data-i="${k}"]`);
+      if (span) span.classList.add('sel');
+    }
+    const several = fixEnd > fixStart;
+    $('fix-title').textContent = several ? 'Correct words' : 'Correct word';
+    $('fix-was').textContent = heard || tokens[fixStart];
+    $('fix-input').value = heard || tokens[fixStart];
+    $('fix-always-word').textContent = heard;
+    $('fix-always-row').hidden = !heard;
+    $('fix-delete').textContent = several ? 'Delete words' : 'Delete word';
+    $('fix-prev').disabled = !canGrow(-1);
+    $('fix-next').disabled = !canGrow(1);
+    renderSuggestions(heard);
+  }
+
+  // Grow the selection by one word, keeping the text box ready for typing.
+  function growFix(dir) {
+    if (!canGrow(dir)) return;
+    if (dir < 0) fixStart -= 2; else fixEnd += 2;
+    updateFixSheet();
+    $('fix-input').focus();
+    $('fix-input').select();
+  }
+  $('fix-prev').onclick = () => growFix(-1);
+  $('fix-next').onclick = () => growFix(1);
+
+  // One-tap suggestions: corrections you've saved before that look like what was heard,
+  // so a name Google gets wrong in a new way is quick to fix (and gets remembered too).
+  function similarity(a, b) {
+    a = a.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    b = b.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    if (!a || !b) return 0;
+    let prev = Array.from({ length: b.length + 1 }, (_, k) => k);
+    for (let x = 1; x <= a.length; x++) {
+      const cur = [x];
+      for (let y = 1; y <= b.length; y++) {
+        cur[y] = Math.min(prev[y] + 1, cur[y - 1] + 1, prev[y - 1] + (a[x - 1] === b[y - 1] ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return 1 - prev[b.length] / Math.max(a.length, b.length);
+  }
+  function renderSuggestions(heard) {
+    const box = $('fix-suggest');
+    box.textContent = '';
+    const targets = [...new Set(Object.values(fixes))]
+      .filter(t => t.toLowerCase() !== heard.toLowerCase())
+      .map(t => ({ t, score: similarity(heard, t) }))
+      .filter(s => s.score >= 0.4)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    for (const { t } of targets) {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.textContent = t;
+      b.onclick = () => { $('fix-input').value = t; $('fix-input').focus(); };
+      box.append(b);
+    }
+    box.hidden = !targets.length;
+  }
+
   function closeFix() {
     if ($('fix-sheet').hidden) return;
     $('fix-sheet').hidden = true;
-    fixIndex = -1;
+    fixStart = fixEnd = -1;
     $('fix-input').blur();
     for (const s of document.querySelectorAll('.w.sel')) s.classList.remove('sel');
   }
 
   async function applyFix(replacement) {
-    const i = fixIndex;
+    const i = fixStart, j = fixEnd;
     if (i < 0) return;
-    const { pre, core, suf } = splitToken(tokens[i]);
+    const heard = fixPhrase();
+    const { pre } = splitToken(tokens[i]);
+    const { suf } = splitToken(tokens[j]);
     replacement = replacement.replace(/\s+/g, ' ').trim();
-    let flash;
+    for (let k = i + 1; k <= j; k++) tokens[k] = ''; // the words after the first are replaced too
+    let flash, remembered = false;
     if (replacement) {
-      tokens[i] = core ? pre + replacement + suf : replacement;
+      tokens[i] = heard ? pre + replacement + suf : replacement;
       flash = i;
-      if (core && replacement !== core && $('fix-always').checked) {
-        rememberFix(core, replacement);
-        toast('Corrected. It’ll be fixed automatically from now on.');
-      } else {
-        toast('Corrected');
+      if (heard && replacement !== heard && $('fix-always').checked) {
+        rememberFix(heard, replacement);
+        remembered = true;
       }
     } else {
-      // Delete the word. Keep punctuation after it (e.g. "milk extra." → "milk.")
-      // and remove one of the spaces around it.
-      if (core && suf && isSpace(tokens[i - 1]) && !tokens[i - 1].includes('\n') && i >= 2) {
+      // Delete the words. Keep punctuation after them (e.g. "milk extra." → "milk.")
+      // and remove one of the spaces around them.
+      if (heard && suf && isSpace(tokens[i - 1]) && !tokens[i - 1].includes('\n') && i >= 2) {
         tokens[i - 1] = '';
         tokens[i] = suf;
-      } else if (core && suf) {
+      } else if (heard && suf) {
         tokens[i] = suf;
       } else {
         tokens[i] = '';
         if (isSpace(tokens[i - 1]) && !tokens[i - 1].includes('\n')) tokens[i - 1] = '';
-        else if (isSpace(tokens[i + 1]) && !tokens[i + 1].includes('\n')) tokens[i + 1] = '';
+        else if (isSpace(tokens[j + 1]) && !tokens[j + 1].includes('\n')) tokens[j + 1] = '';
       }
-      toast('Word deleted');
+      toast(j > i ? 'Words deleted' : 'Word deleted');
     }
-    $('detail-text').value = tokens.join('');
+    let text = tokens.join('');
+    if (remembered) {
+      // Fix the same mistake anywhere else in this note too.
+      const others = countMatches(heard, text);
+      text = applyFixes(text);
+      toast(others > 0
+        ? `Corrected here and in ${others} other place${others > 1 ? 's' : ''}. It’ll be fixed automatically from now on.`
+        : 'Corrected. It’ll be fixed automatically from now on.');
+    } else if (replacement) {
+      toast('Corrected');
+    }
+    $('detail-text').value = text;
     closeFix();
     await saveDetailNow();
     renderWords(flash);
   }
+  const countMatches = (phrase, text) => (text.match(fixRegex([phrase.toLowerCase()])) || []).length;
 
   $('fix-save').onclick = () => applyFix($('fix-input').value);
   $('fix-delete').onclick = () => applyFix('');
@@ -356,24 +450,43 @@
   };
 
   // ---------- Remembered word fixes ----------
-  // Correcting a word with "Always fix" ticked saves the swap (e.g. Lawrence → Laurence),
-  // and it's made automatically in everything recorded after that.
-  function loadFixes() { try { return JSON.parse(read('fixes', '{}')) || {}; } catch { return {}; } }
-  function saveFixes(f) { write('fixes', JSON.stringify(f)); }
+  // Correcting words with "Always fix" ticked saves the swap (e.g. "sever Rini" → "Seberini"),
+  // and it's made automatically in everything recorded after that. Fixes are kept in the
+  // same database as the notes (plus a copy in localStorage) and only go when you remove
+  // them in Settings. Deleting notes doesn't touch them.
+  let fixes = {};
+  const fixKey = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const loadFixes = () => ({ ...fixes });
+  function saveFixes(f) {
+    fixes = { ...f };
+    write('fixes', JSON.stringify(fixes));
+    DB.setSetting('fixes', fixes).catch(() => {});
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  }
+  async function initFixes() {
+    let local = {};
+    try { local = JSON.parse(read('fixes', '{}')) || {}; } catch {}
+    let stored = {};
+    try { stored = (await DB.getSetting('fixes')) || {}; } catch {}
+    fixes = { ...local, ...stored };
+    // Keep both copies in step (e.g. fixes saved by v2.0, which only used localStorage).
+    if (Object.keys(fixes).length !== Object.keys(stored).length) saveFixes(fixes);
+  }
   function rememberFix(from, to) {
-    const f = loadFixes();
-    f[from.toLowerCase()] = to;
-    saveFixes(f);
+    saveFixes({ ...fixes, [fixKey(from)]: to });
   }
   const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Whole words only, any capitalisation: "Lawrence" and "lawrence" both match, "Lawrences" doesn't.
+  // Phrases match with any spacing between their words.
+  function fixRegex(keys) {
+    const alts = keys.map(k => escapeRe(k).replace(/ /g, '[ \\t]+'));
+    return new RegExp(`(?<![\\p{L}\\p{N}'’])(?:${alts.join('|')})(?![\\p{L}\\p{N}'’])`, 'giu');
+  }
   function applyFixes(t) {
-    const f = loadFixes();
-    const keys = Object.keys(f).sort((a, b) => b.length - a.length); // longest first
+    const keys = Object.keys(fixes).sort((a, b) => b.length - a.length); // longest first
     if (!keys.length || !t) return t;
-    // Whole words only, any capitalisation: "Lawrence" and "lawrence" both match, "Lawrences" doesn't.
-    const re = new RegExp(`(?<![\\p{L}\\p{N}'’])(?:${keys.map(escapeRe).join('|')})(?![\\p{L}\\p{N}'’])`, 'giu');
-    return t.replace(re, m => {
-      const to = f[m.toLowerCase()];
+    return t.replace(fixRegex(keys), m => {
+      const to = fixes[fixKey(m)];
       if (to == null) return m;
       // Keep a capital at the start of a sentence: "Wool" → "Woolies" even if saved as "woolies".
       return /^\p{Lu}/u.test(m) && /^\p{Ll}/u.test(to) ? to[0].toUpperCase() + to.slice(1) : to;
@@ -381,16 +494,15 @@
   }
 
   function renderFixes() {
-    const f = loadFixes();
     const list = $('fixes');
     list.textContent = '';
-    for (const from of Object.keys(f).sort()) {
+    for (const from of Object.keys(fixes).sort()) {
       const li = document.createElement('li');
       const pair = document.createElement('span');
       pair.className = 'fix-pair';
       const was = document.createElement('s');
       was.textContent = from;
-      pair.append(was, ' → ', f[from]);
+      pair.append(was, ' → ', fixes[from]);
       const del = document.createElement('button');
       del.className = 'fix-remove';
       del.textContent = '×';
@@ -406,7 +518,14 @@
       list.append(li);
     }
     $('fixes-empty').hidden = list.children.length > 0;
+    $('fixes-clear').hidden = !list.children.length;
   }
+  $('fixes-clear').onclick = () => {
+    if (!confirm('Remove all word fixes? The app will stop correcting these words for you.')) return;
+    saveFixes({});
+    renderFixes();
+    toast('All word fixes removed');
+  };
 
   // "Edit all text" switches to a normal text box for bigger changes.
   function setEditAll(on) {
@@ -429,22 +548,34 @@
     await saveDetailNow();
     startRecording(currentFormat === 'list' ? 'list' : 'note', state.openId);
   };
+  // Reads the screen straight away (before any waiting), so it still saves the right
+  // note when called just as you leave the screen.
   async function saveDetailNow() {
     clearTimeout(saveTimer);
-    if (!state.openId) return;
-    const it = await DB.get(state.openId);
-    if (!it || it.text === $('detail-text').value) return;
-    it.text = $('detail-text').value;
+    unsaved = false;
+    const id = state.openId;
+    if (!id) return;
+    const text = $('detail-text').value;
+    const title = $('detail-title').value.replace(/\s+/g, ' ').trim();
+    const it = await DB.get(id);
+    if (!it || (it.text === text && (it.title || '') === title)) return;
+    it.text = text;
+    if (title) it.title = title; else delete it.title;
     it.updatedAt = new Date().toISOString();
     await DB.put(it);
-    $('save-state').textContent = 'Saved';
+    if (state.openId === id) $('save-state').textContent = 'Saved';
+    else if (!$('home').hidden) renderList(); // already back on the list: show the change
   }
-  $('detail-text').addEventListener('input', () => {
-    $('save-state').textContent = 'Saving…';
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveDetailNow, 600);
-  });
-  $('detail-text').addEventListener('blur', saveDetailNow);
+  for (const el of [$('detail-text'), $('detail-title')]) {
+    el.addEventListener('input', () => {
+      unsaved = true;
+      $('save-state').textContent = 'Saving…';
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveDetailNow, 600);
+    });
+    el.addEventListener('blur', saveDetailNow);
+  }
+  $('detail-title').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
 
   async function copyText(text) {
     try {
@@ -507,12 +638,14 @@
     state.kind = kind;
     state.appendTo = appendTo;
     state.before = '';
+    let title = '';
     if (appendTo) {
       const it = await DB.get(appendTo);
       state.before = it ? it.text : '';
+      title = (it && it.title) || '';
     }
     const list = kind === 'list';
-    $('rec-title').textContent = appendTo ? (list ? 'Add to list' : 'Add to note') : (list ? 'New to-do list' : 'New note');
+    $('rec-title').textContent = title || (appendTo ? (list ? 'Add to list' : 'Add to note') : (list ? 'New to-do list' : 'New note'));
     $('rec-live').className = 'live-card' + (list ? '' : ' note');
     $('newline').hidden = !list;
     $('rec-hint').textContent = list
@@ -783,6 +916,7 @@
   // ---------- Start ----------
   for (const el of document.querySelectorAll('.app-version')) el.textContent = VERSION;
   applyAccent();
+  initFixes();
   history.replaceState({ view: 'home' }, '');
   setTab('note');
 

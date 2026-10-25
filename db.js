@@ -1,17 +1,23 @@
 // Tiny wrapper around IndexedDB, the browser's built-in database.
-// Transcripts are stored only on this device.
+// Notes are stored only on this device, in the "transcripts" store.
+// Small app settings that must last (like word fixes) go in the "settings" store.
 const DB = (() => {
   const NAME = 'voice-notes';
   const STORE = 'transcripts';
+  const SETTINGS = 'settings';
   let dbPromise;
 
   function open() {
     if (!dbPromise) {
       dbPromise = new Promise((resolve, reject) => {
-        const req = indexedDB.open(NAME, 1);
-        req.onupgradeneeded = () => {
-          const store = req.result.createObjectStore(STORE, { keyPath: 'id' });
-          store.createIndex('createdAt', 'createdAt');
+        const req = indexedDB.open(NAME, 2);
+        req.onupgradeneeded = e => {
+          const db = req.result;
+          if (e.oldVersion < 1) {
+            const store = db.createObjectStore(STORE, { keyPath: 'id' });
+            store.createIndex('createdAt', 'createdAt');
+          }
+          if (e.oldVersion < 2) db.createObjectStore(SETTINGS, { keyPath: 'key' });
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
@@ -20,11 +26,11 @@ const DB = (() => {
     return dbPromise;
   }
 
-  async function run(mode, fn) {
+  async function run(storeName, mode, fn) {
     const db = await open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, mode);
-      const result = fn(tx.objectStore(STORE));
+      const tx = db.transaction(storeName, mode);
+      const result = fn(tx.objectStore(storeName));
       tx.oncomplete = () => resolve(result && 'result' in result ? result.result : result);
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
@@ -33,11 +39,16 @@ const DB = (() => {
 
   return {
     async all() {
-      const items = await run('readonly', s => s.getAll());
+      const items = await run(STORE, 'readonly', s => s.getAll());
       return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
-    get: id => run('readonly', s => s.get(id)),
-    put: item => run('readwrite', s => s.put(item)),
-    remove: id => run('readwrite', s => s.delete(id)),
+    get: id => run(STORE, 'readonly', s => s.get(id)),
+    put: item => run(STORE, 'readwrite', s => s.put(item)),
+    remove: id => run(STORE, 'readwrite', s => s.delete(id)),
+    async getSetting(key) {
+      const row = await run(SETTINGS, 'readonly', s => s.get(key));
+      return row ? row.value : undefined;
+    },
+    setSetting: (key, value) => run(SETTINGS, 'readwrite', s => s.put({ key, value })),
   };
 })();

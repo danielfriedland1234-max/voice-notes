@@ -74,6 +74,8 @@
       <h1 id="detail-date" class="detail-date"></h1>
       <span class="icon-btn-spacer"></span>
     </header>
+    <input id="detail-title" class="title-input" type="text" placeholder="Add a title (optional)" maxlength="80"
+      autocomplete="off" enterkeyhint="done" aria-label="Title">
     <p id="words-hint" class="hint"></p>
     <!-- Reading view: every word can be tapped to fix it -->
     <div id="detail-words" class="detail-text detail-words" aria-label="Text"></div>
@@ -121,6 +123,8 @@
       <p>Words the app corrects for you automatically when you record.</p>
       <ul id="fixes" class="fixes"></ul>
       <p id="fixes-empty" class="fixes-empty">None yet. When you tap a word to correct it, leave “Always fix” ticked and it’s fixed for you next time.</p>
+      <p class="fixes-empty">If Google splits a name into two words, tap the first one and use “+ word after” to fix both together.</p>
+      <button id="fixes-clear" class="btn danger wide" hidden>Remove all word fixes</button>
     </div>
 
     <p class="version">Voice Notes v<span class="app-version"></span></p>
@@ -131,7 +135,13 @@
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="fix-title">
       <h2 id="fix-title">Correct word</h2>
       <p class="sheet-was">Heard as: <strong id="fix-was"></strong></p>
+      <!-- Google sometimes splits one word (often a name) into two: include the neighbours -->
+      <div class="grow-row">
+        <button id="fix-prev" class="chip">+ word before</button>
+        <button id="fix-next" class="chip">+ word after</button>
+      </div>
       <input id="fix-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="true" enterkeyhint="done" aria-label="Correct word">
+      <div id="fix-suggest" class="suggest" hidden></div>
       <label id="fix-always-row" class="always">
         <input id="fix-always" type="checkbox" checked>
         <span>Always fix “<span id="fix-always-word"></span>” from now on</span>
